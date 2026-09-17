@@ -73,6 +73,17 @@ export interface ModelChangeEntry extends SessionEntryBase {
 	modelId: string;
 }
 
+export interface UsageEntry extends SessionEntryBase {
+	type: "usage";
+	/** Arbitrary usage category, such as "cache_warm". */
+	kind: string;
+	provider: string;
+	model: string;
+	usage: Usage;
+	/** Optional human-readable qualifier for usage notices. */
+	note?: string;
+}
+
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	type: "compaction";
 	summary: string;
@@ -154,6 +165,7 @@ export type SessionEntry =
 	| SessionMessageEntry
 	| ThinkingLevelChangeEntry
 	| ModelChangeEntry
+	| UsageEntry
 	| CompactionEntry
 	| BranchSummaryEntry
 	| CustomEntry
@@ -1113,6 +1125,23 @@ export class SessionManager {
 			timestamp: new Date().toISOString(),
 			provider,
 			modelId,
+		};
+		this._appendEntry(entry);
+		return entry.id;
+	}
+
+	/** Append model-attributed usage that does not participate in LLM context. */
+	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): string {
+		const entry: UsageEntry = {
+			type: "usage",
+			id: generateId(this.byId),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+			kind,
+			provider,
+			model,
+			usage,
+			...(note ? { note } : {}),
 		};
 		this._appendEntry(entry);
 		return entry.id;
