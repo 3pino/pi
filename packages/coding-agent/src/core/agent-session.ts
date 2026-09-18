@@ -343,7 +343,12 @@ export class AgentSession {
 
 	// Retry state
 	private _retryAbortController: AbortController | undefined = undefined;
+	/** Total retries in the current retry sequence (for reporting). */
 	private _retryAttempt = 0;
+	/** Retries that consume retry.maxRetries. Overload retries do not increment this. */
+	private _retryBudgetAttempt = 0;
+	/** Consecutive overload retries (for backoff and display). */
+	private _overloadRetryAttempt = 0;
 
 	// Bash execution state
 	private readonly _bashAbortControllers = new Set<AbortController>();
@@ -725,6 +730,8 @@ export class AgentSession {
 						attempt: this._retryAttempt,
 					});
 					this._retryAttempt = 0;
+					this._retryBudgetAttempt = 0;
+					this._overloadRetryAttempt = 0;
 				}
 			}
 		}
@@ -741,14 +748,18 @@ export class AgentSession {
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
 		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled || this._retryAttempt >= settings.maxRetries) {
+		if (!settings.enabled) {
 			return false;
 		}
 
 		for (let i = event.messages.length - 1; i >= 0; i--) {
 			const message = event.messages[i];
 			if (message.role === "assistant") {
-				return this._isRetryableError(message as AssistantMessage);
+				if (!this._isRetryableError(message as AssistantMessage)) {
+					return false;
+				}
+				// Provider overload is availability failure, not a spent retry attempt.
+				return this._isOverloadedError(message as AssistantMessage) || this._retryBudgetAttempt < settings.maxRetries;
 			}
 		}
 		return false;
@@ -1207,6 +1218,8 @@ export class AgentSession {
 				finalError: msg.errorMessage,
 			});
 			this._retryAttempt = 0;
+			this._retryBudgetAttempt = 0;
+			this._overloadRetryAttempt = 0;
 		}
 
 		if (await this._checkCompaction(msg)) {
@@ -2951,6 +2964,15 @@ export class AgentSession {
 		return isRetryableAssistantError(message);
 	}
 
+	/** Provider overload retries indefinitely and does not consume retry.maxRetries. */
+	private _isOverloadedError(message: AssistantMessage): boolean {
+		return (
+			message.stopReason === "error" &&
+			typeof message.errorMessage === "string" &&
+			/(?:\boverloaded\b|overloaded_error)/i.test(message.errorMessage)
+		);
+	}
+
 	/**
 	 * Retry policy + callbacks shared by compaction and branch-summary summarization calls.
 	 * Uses the same `settings.retry` budget/backoff as agent-turn retries so a single transient
@@ -2992,20 +3014,29 @@ export class AgentSession {
 			return false;
 		}
 
+		const overloaded = this._isOverloadedError(message);
+		if (!overloaded) {
+			this._retryBudgetAttempt++;
+			if (this._retryBudgetAttempt > settings.maxRetries) {
+				// Preserve completed counts so post-run handling can emit the final failure.
+				this._retryBudgetAttempt--;
+				return false;
+			}
+			this._overloadRetryAttempt = 0;
+		} else {
+			this._overloadRetryAttempt++;
+		}
 		this._retryAttempt++;
 
-		if (this._retryAttempt > settings.maxRetries) {
-			// Preserve the completed attempt count so post-run handling can emit the final failure.
-			this._retryAttempt--;
-			return false;
-		}
-
-		const delayMs = retryDelayMs(settings, this._retryAttempt);
+		const backoffAttempt = overloaded ? this._overloadRetryAttempt : this._retryBudgetAttempt;
+		// Overload retries are unbounded, so cap only their backoff at 60 seconds.
+		const delayMs = overloaded ? Math.min(retryDelayMs(settings, backoffAttempt), 60_000) : retryDelayMs(settings, backoffAttempt);
 
 		this._emit({
 			type: "auto_retry_start",
-			attempt: this._retryAttempt,
-			maxAttempts: settings.maxRetries,
+			attempt: overloaded ? this._overloadRetryAttempt : this._retryBudgetAttempt,
+			// Zero is the internal sentinel for an unlimited overload retry sequence.
+			maxAttempts: overloaded ? 0 : settings.maxRetries,
 			delayMs,
 			errorMessage: message.errorMessage || "Unknown error",
 		});
@@ -3024,6 +3055,8 @@ export class AgentSession {
 			// Aborted during sleep - emit end event so UI can clean up
 			const attempt = this._retryAttempt;
 			this._retryAttempt = 0;
+			this._retryBudgetAttempt = 0;
+			this._overloadRetryAttempt = 0;
 			this._emit({
 				type: "auto_retry_end",
 				success: false,

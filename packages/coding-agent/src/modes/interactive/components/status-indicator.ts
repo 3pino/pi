@@ -53,7 +53,10 @@ export class RetryStatusIndicator extends StatusIndicator {
 
 	constructor(ui: TUI, attempt: number, maxAttempts: number, delayMs: number) {
 		const retryMessage = (seconds: number) =>
-			`Retrying (${attempt}/${maxAttempts}) in ${seconds}s... (${keyText("app.interrupt")} to cancel)`;
+			// maxAttempts === 0 means provider overload retry is intentionally unbounded.
+			maxAttempts === 0
+				? `Retrying after overload (#${attempt}) in ${seconds}s... (${keyText("app.interrupt")} to cancel)`
+				: `Retrying (${attempt}/${maxAttempts}) in ${seconds}s... (${keyText("app.interrupt")} to cancel)`;
 		super(
 			"retry",
 			ui,
