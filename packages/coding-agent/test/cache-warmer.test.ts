@@ -15,10 +15,9 @@ import {
 	type CacheWarmingAction,
 	type CacheWarmingDecision,
 	type CacheWarmingDecisionEvent,
-	type CacheWarmingNotice,
 	type CacheWarmRequest,
-	formatCacheWarmingNotice,
 	formatCacheWarmingStatus,
+	formatCacheWarmingUsage,
 	getCacheWarmingDelayMs,
 	getPromptCacheTtlMs,
 	isReplayable,
@@ -27,7 +26,7 @@ import { createEventBus } from "../src/core/event-bus.ts";
 import { createExtensionRuntime, loadExtensionFromFactory } from "../src/core/extensions/loader.ts";
 import { ExtensionRunner } from "../src/core/extensions/runner.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
-import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
+import { type SessionEntry, SessionManager, type UsageEntry } from "../src/core/session-manager.ts";
 import type { CacheWarmingMode } from "../src/core/settings-manager.ts";
 import { createInMemoryModelRegistry } from "./model-runtime-test-utils.ts";
 
@@ -92,8 +91,9 @@ function fakeRuntime(
 ) {
 	const calls: Array<{ model: Model<Api>; options: ModelsSimpleStreamOptions | undefined }> = [];
 	const events: CacheWarmingDecisionEvent[] = [];
-	const notices: CacheWarmingNotice[] = [];
-	const appendUsage = vi.fn();
+	const warmedEntries: UsageEntry[] = [];
+	const usageManager = SessionManager.inMemory();
+	const appendUsage = vi.fn(usageManager.appendUsage.bind(usageManager));
 	const state = { mode: options.mode ?? "idle", branch: options.branch ?? branchWithPrompt(100_000) };
 	const warmer = new CacheWarmer(
 		{
@@ -111,8 +111,8 @@ function fakeRuntime(
 			return options.decide?.(event) ?? event.action;
 		},
 	);
-	warmer.onWarmed = (notice) => notices.push(notice);
-	return { warmer, calls, events, notices, appendUsage, state };
+	warmer.onWarmed = (entry) => warmedEntries.push(entry);
+	return { warmer, calls, events, warmedEntries, appendUsage, state };
 }
 
 function request(model: Model<Api> = adaptiveModel, options: ModelsSimpleStreamOptions = {}): CacheWarmRequest {
@@ -146,7 +146,7 @@ describe("cache warming", () => {
 
 	it("replays profitable requests, preserves options, and accounts for repeated refreshes", async () => {
 		vi.useFakeTimers();
-		const { warmer, calls, events, appendUsage, notices } = fakeRuntime();
+		const { warmer, calls, events, appendUsage, warmedEntries } = fakeRuntime();
 		const signal = new AbortController().signal;
 		const transformHeaders = async () => ({});
 
@@ -173,7 +173,7 @@ describe("cache warming", () => {
 			warmUsage,
 			undefined,
 		);
-		expect(notices).toEqual([{ usage: warmUsage }]);
+		expect(warmedEntries).toEqual([appendUsage.mock.results[0]?.value]);
 
 		await vi.advanceTimersByTimeAsync(270_000);
 		expect(calls).toHaveLength(2);
@@ -197,7 +197,7 @@ describe("cache warming", () => {
 		forced.warmer.start(request(), current);
 		await vi.advanceTimersByTimeAsync(270_000);
 		expect(forced.calls).toHaveLength(1);
-		expect(forced.notices).toEqual([{ usage: warmUsage, note: "extension override" }]);
+		expect(forced.warmedEntries[0]?.note).toBe("extension override");
 		forced.warmer.cancel();
 
 		const vetoed = fakeRuntime({ decide: () => "stop" });
@@ -271,7 +271,7 @@ describe("cache warming", () => {
 		failed.warmer.cancel();
 	});
 
-	it("formats status and usage notices", () => {
+	it("formats status and usage entries", () => {
 		const decision: CacheWarmingDecision = {
 			phase: "idle",
 			warmCost: 0.013,
@@ -289,9 +289,14 @@ describe("cache warming", () => {
 			...warmUsage,
 			cost: { input: 0.00004, output: 0.00005, cacheRead: 0.02940725, cacheWrite: 0, total: 0.02949725 },
 		};
-		expect(formatCacheWarmingNotice({ usage, note: "extension override" })).toBe(
-			"Cache warmed (extension override): $0.029497",
+		const entry = SessionManager.inMemory().appendUsage(
+			"cache_warm",
+			adaptiveModel.provider,
+			adaptiveModel.id,
+			usage,
+			"extension override",
 		);
+		expect(formatCacheWarmingUsage(entry)).toBe("Cache warmed (extension override): $0.029497");
 	});
 });
 

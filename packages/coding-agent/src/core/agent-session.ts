@@ -54,7 +54,7 @@ import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
-import type { CacheWarmer, CacheWarmingNotice, CacheWarmingStatus } from "./cache-warmer.ts";
+import type { CacheWarmer, CacheWarmingStatus } from "./cache-warmer.ts";
 import {
 	type CompactionPreparation,
 	type CompactionResult,
@@ -163,10 +163,9 @@ export type AgentSessionEvent =
 			followUp: readonly string[];
 	  }
 	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
-	| { type: "entry_appended"; entry: SessionEntry }
+	| Extract<SessionEntry, { type: "custom" | "usage" }>
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
-	| { type: "cache_warmed"; notice: CacheWarmingNotice }
 	| {
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
@@ -399,7 +398,7 @@ export class AgentSession {
 		this._modelRuntime = config.modelRuntime;
 		this._cacheWarmer = config.cacheWarmer;
 		if (this._cacheWarmer) {
-			this._cacheWarmer.onWarmed = (notice) => this._emit({ type: "cache_warmed", notice });
+			this._cacheWarmer.onWarmed = (entry) => this._emit(entry);
 		}
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
@@ -2707,8 +2706,8 @@ export class AgentSession {
 				appendEntry: (customType, data) => {
 					const entryId = this.sessionManager.appendCustomEntry(customType, data);
 					const entry = this.sessionManager.getEntry(entryId);
-					if (entry) {
-						this._emit({ type: "entry_appended", entry });
+					if (entry?.type === "custom") {
+						this._emit(entry);
 					}
 				},
 				setSessionName: (name) => {

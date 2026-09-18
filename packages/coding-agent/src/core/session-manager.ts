@@ -1130,8 +1130,8 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/** Append model-attributed usage that does not participate in LLM context. */
-	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): string {
+	/** Append model-attributed usage that does not participate in LLM context. Returns the appended entry. */
+	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): UsageEntry {
 		const entry: UsageEntry = {
 			type: "usage",
 			id: generateId(this.byId),
@@ -1144,7 +1144,7 @@ export class SessionManager {
 			...(note ? { note } : {}),
 		};
 		this._appendEntry(entry);
-		return entry.id;
+		return entry;
 	}
 
 	/** Append a compaction summary as child of current leaf, then advance leaf. Returns entry id. */

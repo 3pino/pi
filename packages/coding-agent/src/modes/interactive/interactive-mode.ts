@@ -65,11 +65,7 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
-import {
-	type CacheWarmingNotice,
-	formatCacheWarmingNotice,
-	formatCacheWarmingStatus,
-} from "../../core/cache-warmer.ts";
+import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -98,7 +94,12 @@ import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
-import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+import {
+	type SessionEntry,
+	SessionManager,
+	sessionEntryToContextMessages,
+	type UsageEntry,
+} from "../../core/session-manager.ts";
 import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
@@ -3213,14 +3214,14 @@ export class InteractiveMode {
 				this.ui.requestRender();
 				break;
 
-			case "cache_warmed":
-				this.addCacheWarmingNotice(event.notice);
+			case "custom":
+				this.addCustomEntryToChat(event);
 				this.ui.requestRender();
 				break;
 
-			case "entry_appended":
-				if (event.entry.type === "custom") {
-					this.addCustomEntryToChat(event.entry);
+			case "usage":
+				if (event.kind === "cache_warm") {
+					this.addCacheWarmingUsage(event);
 					this.ui.requestRender();
 				}
 				break;
@@ -3727,7 +3728,7 @@ export class InteractiveMode {
 				continue;
 			}
 			if (isUsageSessionEntry(item)) {
-				this.addCacheWarmingNotice(item);
+				this.addCacheWarmingUsage(item);
 				continue;
 			}
 			if (isCompactionCostNotice(item)) {
@@ -3821,10 +3822,10 @@ export class InteractiveMode {
 		this.renderSessionItems(items, options);
 	}
 
-	private addCacheWarmingNotice(notice: CacheWarmingNotice): void {
+	private addCacheWarmingUsage(entry: UsageEntry): void {
 		if (!this.settingsManager.getShowCacheMissNotices()) return;
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("dim", formatCacheWarmingNotice(notice)), 1, 0));
+		this.chatContainer.addChild(new Text(theme.fg("dim", formatCacheWarmingUsage(entry)), 1, 0));
 	}
 
 	/**

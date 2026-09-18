@@ -121,9 +121,6 @@ export interface CacheWarmingDecisionEventResult {
 	action?: CacheWarmingAction;
 }
 
-/** Usage of a successful refresh; `note` marks refreshes an extension forced. */
-export type CacheWarmingNotice = Pick<UsageEntry, "usage" | "note">;
-
 export interface CacheWarmingStatus {
 	/** "scheduled": a refresh timer is armed; "refreshing": a warm request is in flight. */
 	state: "inactive" | "scheduled" | "refreshing";
@@ -170,8 +167,8 @@ export class CacheWarmer {
 	private readonly getMode: () => CacheWarmingMode;
 	/** Lets extensions override `event.action`; failures fall back to pi's decision. */
 	private readonly decide: (event: CacheWarmingDecisionEvent) => Promise<CacheWarmingAction>;
-	/** Called after each successful refresh. */
-	onWarmed?: (notice: CacheWarmingNotice) => void;
+	/** Called with the persisted usage entry after each successful refresh. */
+	onWarmed?: (entry: UsageEntry) => void;
 
 	constructor(
 		models: Pick<ModelRuntime, "streamSimple">,
@@ -346,18 +343,14 @@ export class CacheWarmer {
 				.result();
 			if (message.stopReason !== "error" && message.stopReason !== "aborted") {
 				run.spentCost += message.usage.cost.total;
-				const notice: CacheWarmingNotice = {
-					usage: message.usage,
-					...(extensionOverride ? { note: "extension override" } : {}),
-				};
-				this.sessionManager.appendUsage(
+				const entry = this.sessionManager.appendUsage(
 					"cache_warm",
 					message.provider,
 					message.responseModel ?? message.model,
 					message.usage,
-					notice.note,
+					extensionOverride ? "extension override" : undefined,
 				);
-				this.onWarmed?.(notice);
+				this.onWarmed?.(entry);
 			}
 		} catch {
 			// Cache warming is best-effort and must not affect the active agent run.
@@ -436,9 +429,9 @@ export function formatCacheWarmingStatus(status: CacheWarmingStatus, now = Date.
 	return `${formatCacheWarmingDecisionTime(status.nextWarmAt, now)} (${details})`;
 }
 
-/** Transcript notice for a successful refresh. */
-export function formatCacheWarmingNotice(notice: CacheWarmingNotice): string {
-	const note = notice.note ? ` (${notice.note})` : "";
-	const cost = notice.usage.cost.total.toFixed(6).replace(/(\.\d{3}\d*?)0+$/, "$1");
+/** One-line transcript text for persisted cache-warming usage. */
+export function formatCacheWarmingUsage(entry: UsageEntry): string {
+	const note = entry.note ? ` (${entry.note})` : "";
+	const cost = entry.usage.cost.total.toFixed(6).replace(/(\.\d{3}\d*?)0+$/, "$1");
 	return `Cache warmed${note}: $${cost}`;
 }
