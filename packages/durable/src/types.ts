@@ -2,7 +2,14 @@ import type { AttachedReplicatedState, Context, Draft, JsonValue } from "@earend
 import type { Op } from "@earendil-works/chord/delta";
 import type { Message, Models } from "@earendil-works/pi-ai";
 import type { ExecutionEnv } from "./env/index.ts";
-import type { ContextView, ConversationHandle, RegistrySnapshot, SettledTask } from "./harness/types.ts";
+import type {
+	Agent,
+	ContextView,
+	ConversationHandle,
+	RegistrySnapshot,
+	Settings,
+	SettledTask,
+} from "./harness/types.ts";
 
 /** JSON object used as the root of every durable document. */
 export type JsonObject = { [key: string]: JsonValue };
@@ -131,8 +138,11 @@ export type RunningTask<I, S, R> = TaskRecord<I, S, R> & {
 	readonly state: Extract<TaskState<S, R>, { readonly status: "running" }>;
 };
 
-/** Next state a task commits for itself: a replacement checkpoint or its terminal outcome. */
-export type NextTaskState<S, R> = Extract<TaskState<S, R>, { readonly status: "running" | "terminal" }>;
+/**
+ * Next state a task commits for itself: a replacement checkpoint, a wait, or its outcome. A returned `terminal` state is
+ * stored as `completing` while ordinary owned work below the task is live (spec §5.5).
+ */
+export type NextTaskState<S, R> = Extract<TaskState<S, R>, { readonly status: "running" | "waiting" | "terminal" }>;
 
 /**
  * Runs one checkpoint phase. It must commit a changed checkpoint or a terminal outcome through `runtime.commit()`;
@@ -167,10 +177,14 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
 	readonly signal: AbortSignal;
 	/** Registry snapshot of the current phase; refreshed at every phase boundary. */
 	readonly registry: RegistrySnapshot;
+	/** The task's conversation's agent, resolved at most once per phase, at first use, and fixed for the phase. */
+	agent(context: Context): Promise<Agent>;
+	/** `HarnessOptions.settings`, resolved at each access. */
+	readonly settings: Settings;
 	readonly models: Models;
-	/** `HarnessOptions.env`; tools receive it as `api.env`. */
-	readonly env: ExecutionEnv | undefined;
-	/** Handlers registered for this task's name whose scope matches its conversation. */
+	/** Calls `HarnessOptions.env` for the task's conversation; rejects with its error. */
+	env(context: Context): Promise<ExecutionEnv | undefined>;
+	/** Handlers of this task's name from the extensions its conversation selects, in extension order. */
 	readonly hooks: HookRunner<H>;
 
 	/**
@@ -194,6 +208,8 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
 	getTask<T>(id: TaskId<T>, context: Context): Promise<TaskRecord<JsonValue, JsonValue, T> | undefined>;
 	/** Resolve with the task's terminal receipt; rejects when the invocation ends. */
 	waitForTask<T>(id: TaskId<T>, context: Context): Promise<SettledTask<T>>;
+	/** Outcomes of terminal tasks, in order; rejects when one is missing or not terminal. Used after a wait. */
+	outcomes<T>(ids: readonly TaskId<T>[], context: Context): Promise<TaskOutcome<T>[]>;
 	/**
 	 * Invocation-bound handle of an existing conversation, for example one this task owns; `undefined` when absent. Its
 	 * operations and the submissions it returns reject after the invocation ends; admitted work stays durable.
@@ -204,7 +220,7 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
 	/** Undefined when the entry is absent, not visible, or has another kind. */
 	entry<D extends JsonValue>(token: Entry<D>, id: EntryId, context: Context): Promise<TypedEntry<D> | undefined>;
 	/** Committed raw active transcript and model context, optionally cut off at the visible entry `at`. */
-	context(conversationId: ConversationId, context: Context, at?: EntryId): Promise<ContextView>;
+	context(conversationId: ConversationId, context: Context, options?: { readonly at?: EntryId }): Promise<ContextView>;
 	/** The Harness clock. */
 	now(): number;
 	/** Forward a non-fatal failure to `HarnessOptions.onReport`. */
@@ -244,13 +260,22 @@ export interface Task<I, S extends { phase: string }, R, H extends object> {
 	readonly definition: TaskDefinition<I, S, R, H>;
 }
 
+/** Who owns a task: its conversation (a top-level task) or another task of the same conversation (a child task). */
+export type TaskOwnership = { readonly kind: "conversation" } | { readonly kind: "task"; readonly taskId: TaskId };
+
+/** How a waiting task treats the tasks it waits on (spec §5.5). */
+export type JoinPolicy = "failFast" | "allSettled";
+
 /** Creation options for a durable task. */
 export type TaskOptions = {
-	/** Owning conversation; required for Session commits that are not bound to a conversation. */
+	/** Required: a task always names its owner (spec §5.5). */
+	readonly ownership: TaskOwnership;
+	/**
+	 * Default: the owner task's conversation, or the transaction's bound conversation; required for conversation-owned
+	 * tasks created by Session commits that are not bound to a conversation.
+	 */
 	readonly conversationId?: ConversationId;
-	/** Tasks that must be terminal before ordinary execution may begin. */
-	readonly after?: readonly TaskId[];
-	/** Excluded from ordinary idle waits and conversation aborts. */
+	/** Conversation-owned tasks only: excluded from ordinary idle waits, conversation aborts, and cascades. */
 	readonly background?: boolean;
 };
 
@@ -460,7 +485,7 @@ export type TaskOutcome<R> =
 /** Complete durable execution state of a task. */
 export type TaskState<S, R> =
 	| {
-			/** Eligible for scheduling when its dependencies are terminal. */
+			/** Eligible for scheduling. */
 			readonly status: "pending";
 			/** Complete durable state from which execution resumes. */
 			readonly checkpoint: S;
@@ -472,6 +497,20 @@ export type TaskState<S, R> =
 			/** Complete durable state from which execution resumes. */
 			readonly checkpoint: S;
 			readonly outcome?: never;
+	  }
+	| {
+			/** Parked without an invocation until every task in `on` is terminal; then resumes at `checkpoint`. */
+			readonly status: "waiting";
+			readonly checkpoint: S;
+			readonly on: readonly TaskId[];
+			readonly policy: JoinPolicy;
+			readonly outcome?: never;
+	  }
+	| {
+			/** Outcome decided; becomes terminal once no ordinary owned work below is live. Runs no more code. */
+			readonly status: "completing";
+			readonly checkpoint?: never;
+			readonly outcome: TaskOutcome<R>;
 	  }
 	| {
 			/** Permanently settled durable result receipt. */
@@ -490,24 +529,32 @@ type TaskRecordBase<I, R> = {
 	readonly version: number;
 	/** Original task input retained while the task is live or terminal. */
 	readonly input: I;
-	/** Tasks that must be terminal before ordinary execution may begin. */
-	readonly after: readonly TaskId[];
-	/** Whether this task is excluded from ordinary idle waits and conversation aborts. */
+	/** Owning task of a child task; absent for a task its conversation owns. Immutable. */
+	readonly owner?: TaskId;
+	/** Whether this conversation-owned task is excluded from ordinary idle waits, conversation aborts, and cascades. */
 	readonly background: boolean;
 	/** Durable abort mark checked before run-mode progress is committed. */
 	readonly abortRequested: boolean;
+	/**
+	 * Wall-clock milliseconds of the first change to `running`, stamped by the Session. Kept through waits and recovery,
+	 * so the span to `endedAt` includes them. Absent before the task first runs, and on records written by earlier
+	 * versions.
+	 */
+	readonly startedAt?: number;
+	/** Wall-clock milliseconds of the change to `terminal`, stamped by the Session; absent while live. */
+	readonly endedAt?: number;
 };
 
 /** Complete replacement record for one durable task state machine. */
 export type TaskRecord<I, S, R> = TaskRecordBase<I, R> &
 	(
 		| {
-				readonly state: Extract<TaskState<S, R>, { readonly status: "pending" | "running" }>;
-				/** Small first-writer-wins values retained while the task is live. */
+				readonly state: Extract<TaskState<S, R>, { readonly status: "pending" | "running" | "waiting" }>;
+				/** Small first-writer-wins values retained while the task can run. */
 				readonly memos?: Readonly<Record<string, JsonValue>>;
 		  }
 		| {
-				readonly state: Extract<TaskState<S, R>, { readonly status: "terminal" }>;
+				readonly state: Extract<TaskState<S, R>, { readonly status: "completing" | "terminal" }>;
 				readonly memos?: never;
 		  }
 	);
@@ -564,37 +611,51 @@ export type Page<T, C> = {
 	readonly next?: C;
 };
 
-/** Backend-owned JSON continuation state that callers only round-trip to the same scan. */
+/**
+ * Backend-owned JSON continuation state that callers only round-trip to the same scan. It carries the scan's order: a
+ * scan given a cursor continues in that order, and rejects a different `order` in its query.
+ */
 export type Cursor = Readonly<Record<string, JsonValue>>;
+
+/** ID order of a scan: `ascending` is oldest first, `descending` newest first. */
+export type ScanOrder = "ascending" | "descending";
 
 /** Optional filters for an ordered conversation scan. */
 export type ConversationQuery = {
 	readonly ownerConversationId?: ConversationId;
 	readonly ownerTaskId?: TaskId;
+	/** Default `ascending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
-/** Inclusive ID bounds for a newest-first scan of one conversation's fork-aware history. */
+/** Inclusive ID bounds for a scan of one conversation's fork-aware history. */
 export type EntryQuery = {
 	readonly conversationId: ConversationId;
 	/** Oldest entry ID that may be returned. */
 	readonly minEntryId?: EntryId;
 	/** Newest entry ID that may be returned. */
 	readonly maxEntryId?: EntryId;
+	/** Default `descending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
 /** Optional filters for an ordered scan of durable task records. */
 export type TaskQuery = {
 	readonly conversationId?: ConversationId;
 	readonly kind?: string;
-	readonly status?: "pending" | "running" | "terminal";
+	readonly status?: TaskState<JsonValue, JsonValue>["status"];
 	readonly abortRequested?: boolean;
 	readonly background?: boolean;
+	/** Default `ascending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
 /** Optional filters for an ordered scan of submission records. */
 export type SubmissionQuery = {
 	readonly conversationId?: ConversationId;
 	readonly status?: SubmissionRecord["status"];
+	/** Default `ascending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
 /** Current state or one historical commit sequence used for document membership and content reads. */
@@ -721,6 +782,8 @@ export interface Tx {
 		limit: number,
 		cursor?: Cursor,
 	): Promise<Page<TaskRecord<JsonValue, JsonValue, JsonValue>, Cursor>>;
+	/** Committed submission with a conversation-scoped request ID. */
+	submissionByRequest(conversationId: ConversationId, requestId: string): Promise<SubmissionRecord | undefined>;
 
 	/** Create a conversation with explicitly selected ownership. */
 	createConversation(options: { readonly ownership: ConversationOwnership }): Promise<ConversationRecord>;
@@ -741,8 +804,13 @@ export interface Tx {
 	createTask<I, S extends { phase: string }, R, H extends object>(
 		task: Task<I, S, R, H>,
 		input: I,
-		options?: TaskOptions,
+		options: TaskOptions,
 	): Promise<TaskId<R>>;
+	/**
+	 * Create a raw submission record with a fresh ID. No admission rules apply: no busy check, no inbox queueing, no
+	 * placement. Use `Conversation.submit()` or a conversation handle unless the caller implements admission itself.
+	 */
+	createSubmission(create: SubmissionCreate): Promise<SubmissionRecord>;
 	/**
 	 * Settle a queued or placed submission; only a placed input can be answered, and a settled submission stays
 	 * unchanged. Resolved against this transaction's latest record of the submission, so it works after table writes.
@@ -956,7 +1024,7 @@ export interface Storage {
 	/** Look up one conversation by exact ID. */
 	conversation(id: ConversationId, context: Context): Promise<ConversationRecord | undefined>;
 
-	/** Scan conversations in ascending ID order. */
+	/** Scan conversations in `query.order` (default ascending) by ID. */
 	scanConversations(
 		query: ConversationQuery,
 		limit: number,
@@ -983,7 +1051,7 @@ export interface Storage {
 		context: Context,
 	): Promise<(EntryRecord & { readonly head: EntryId }) | undefined>;
 
-	/** Scan the inclusive visible range newest-first, returning at most `limit` entries. */
+	/** Scan the inclusive visible range in `query.order` (default descending), returning at most `limit` entries. */
 	scanEntries(
 		query: EntryQuery,
 		limit: number,
@@ -994,7 +1062,7 @@ export interface Storage {
 	/** Look up the latest complete record for one task. */
 	task(id: TaskId, context: Context): Promise<TaskRecord<JsonValue, JsonValue, JsonValue> | undefined>;
 
-	/** Scan task records matching every supplied filter. */
+	/** Scan task records matching every supplied filter in `query.order` (default ascending) by ID. */
 	scanTasks(
 		query: TaskQuery,
 		limit: number,
@@ -1005,7 +1073,7 @@ export interface Storage {
 	/** Look up the latest complete record for one admitted submission. */
 	submission(id: SubmissionId, context: Context): Promise<SubmissionRecord | undefined>;
 
-	/** Scan submissions matching every supplied filter in ascending ID order. */
+	/** Scan submissions matching every supplied filter in `query.order` (default ascending) by ID. */
 	scanSubmissions(
 		query: SubmissionQuery,
 		limit: number,

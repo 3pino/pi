@@ -98,6 +98,8 @@ export type LoadedDocument = {
 /** Session services used by a transaction while it holds the mutation line. */
 export interface TransactionHost {
 	readonly storage: Storage;
+	/** Wall clock for task lifecycle times. */
+	now(): number;
 	/** Return the cached current incarnation without loading. */
 	cached(addressId: string): LoadedDocument | undefined;
 	/** Return the cached current incarnation, cold-loading and migrating it when necessary. */
@@ -268,7 +270,7 @@ export class Transaction implements Tx {
 		return this.#read("submission", () => this.#host.storage.submission(id, this.#context));
 	}
 
-	/** Internal: committed submission with a conversation-scoped request ID. */
+	/** Committed submission with a conversation-scoped request ID. */
 	submissionByRequest(conversationId: ConversationId, requestId: string): Promise<SubmissionRecord | undefined> {
 		return this.#read("submissionByRequest", () =>
 			this.#host.storage.submissionByRequest(conversationId, requestId, this.#context),
@@ -381,10 +383,22 @@ export class Transaction implements Tx {
 	createTask<I, S extends { phase: string }, R, H extends object>(
 		task: Task<I, S, R, H>,
 		input: I,
-		options?: TaskOptions,
+		options: TaskOptions,
 	): Promise<TaskId<R>> {
 		return this.#write(async () => {
-			const conversationId = options?.conversationId ?? this.#scope.conversationId;
+			const ownership = options.ownership;
+			let owner: AnyTaskRecord | undefined;
+			if (ownership.kind === "task") {
+				// Validated again against the owner's final candidate during assembly.
+				owner = await this.#currentTask(ownership.taskId);
+				this.#assertOpen();
+				if (owner === undefined) throw new Error(`Task owner ${ownership.taskId} does not exist`);
+				if (options.background === true) throw new TypeError("A child task cannot be background");
+				if (options.conversationId !== undefined && options.conversationId !== owner.conversationId) {
+					throw new Error(`A child task lives in its owner's conversation ${owner.conversationId}`);
+				}
+			}
+			const conversationId = owner?.conversationId ?? options.conversationId ?? this.#scope.conversationId;
 			if (conversationId === undefined) throw new TypeError("Tx.createTask() requires options.conversationId");
 			await this.#requireConversation(conversationId);
 			this.#assertOpen();
@@ -399,8 +413,8 @@ export class Transaction implements Tx {
 					kind: definition.name,
 					version: definition.version,
 					input,
-					after: options?.after ?? [],
-					background: options?.background ?? false,
+					...(owner === undefined ? {} : { owner: owner.id }),
+					background: options.background ?? false,
 					abortRequested: false,
 					state: { status: "pending", checkpoint },
 				},
@@ -411,7 +425,7 @@ export class Transaction implements Tx {
 		});
 	}
 
-	/** Internal: create a submission record with a fresh ID. */
+	/** Create a raw submission record with a fresh ID; no admission rules apply. */
 	createSubmission(create: SubmissionCreate): Promise<SubmissionRecord> {
 		return this.#write(async () => {
 			await this.#requireConversation(create.conversationId);
@@ -455,8 +469,22 @@ export class Transaction implements Tx {
 		}
 		task.write = {
 			kind: task.write?.kind === "create" ? "create" : "replace",
-			record: copyJson(value, TABLE_JSON_COPY_OPTIONS) as unknown as AnyTaskRecord,
+			record: copyJson(this.#stampTimes(value, candidate), TABLE_JSON_COPY_OPTIONS) as unknown as AnyTaskRecord,
 		};
+	}
+
+	/** Internal: candidate records of the tasks this transaction created or replaced so far. */
+	stagedTasks(): AnyTaskRecord[] {
+		const records: AnyTaskRecord[] = [];
+		for (const task of this.#tasksById.values()) if (task.write !== undefined) records.push(task.write.record);
+		return records;
+	}
+
+	/** Internal: conversations this transaction created or forked so far. */
+	stagedConversations(): ConversationRecord[] {
+		const records: ConversationRecord[] = [];
+		for (const write of this.#writes) if (write.type === "conversation") records.push(write.value);
+		return records;
 	}
 
 	// ─── Documents ──────────────────────────────────────────────────────────
@@ -732,7 +760,7 @@ export class Transaction implements Tx {
 			if (plan !== undefined) plans.push(plan);
 		}
 		this.#rejectForkSourceWrites(plans);
-		await this.#validateConversationOwners();
+		await this.#validateOwners();
 		for (const [id, task] of this.#tasksById) {
 			if (task.write?.kind !== "replace") continue;
 			const committed = await this.#committedTask(id);
@@ -820,21 +848,27 @@ export class Transaction implements Tx {
 
 	// ─── Helpers ────────────────────────────────────────────────────────────
 
-	async #validateConversationOwners(): Promise<void> {
+	/**
+	 * New owned work needs a live owner, judged on the owner's final candidate: not `completing`, terminal, or
+	 * abort-marked. A task therefore cannot create owned work in the commit that finishes it (spec §5.5).
+	 */
+	async #validateOwners(): Promise<void> {
+		const owners: { readonly what: string; readonly taskId: TaskId }[] = [];
 		for (const write of this.#writes) {
 			if (write.type !== "conversation" || write.value.owner === undefined) continue;
-			const owner = write.value.owner;
-			const task = await this.#currentTask(owner.taskId);
-			if (task === undefined) throw new Error(`Conversation owner task ${owner.taskId} does not exist`);
-			if (task.conversationId !== owner.conversationId) {
-				throw new Error(`Conversation owner task ${owner.taskId} changed conversations`);
+			owners.push({ what: "Conversation owner task", taskId: write.value.owner.taskId });
+		}
+		for (const task of this.#tasksById.values()) {
+			const record = task.write?.kind === "create" ? task.write.record : undefined;
+			if (record?.owner !== undefined) owners.push({ what: "Task owner", taskId: record.owner });
+		}
+		for (const { what, taskId } of owners) {
+			const task = await this.#currentTask(taskId);
+			if (task === undefined) throw new Error(`${what} ${taskId} does not exist`);
+			if (task.state.status === "terminal" || task.state.status === "completing") {
+				throw new Error(`${what} ${taskId} is ${task.state.status}`);
 			}
-			if (task.state.status === "terminal") {
-				throw new Error(`Conversation owner task ${owner.taskId} is terminal`);
-			}
-			if (task.abortRequested) {
-				throw new Error(`Conversation owner task ${owner.taskId} is abort-marked`);
-			}
+			if (task.abortRequested) throw new Error(`${what} ${taskId} is abort-marked`);
 		}
 	}
 
@@ -911,6 +945,23 @@ export class Transaction implements Tx {
 		}
 	}
 
+	/**
+	 * Lifecycle times: `startedAt` on the first change to `running`, `endedAt` on the change to `terminal`. Once set,
+	 * they carry over from the replaced record; records written before they existed lack them.
+	 */
+	#stampTimes(value: AnyTaskRecord, candidate: AnyTaskRecord | undefined): AnyTaskRecord {
+		const status = value.state.status;
+		const now = (stamps: boolean) => (stamps ? this.#host.now() : undefined);
+		const startedAt = candidate?.startedAt ?? value.startedAt ?? now(status === "running");
+		const endedAt = candidate?.endedAt ?? value.endedAt ?? now(status === "terminal");
+		if (startedAt === value.startedAt && endedAt === value.endedAt) return value;
+		return {
+			...value,
+			...(startedAt === undefined ? {} : { startedAt }),
+			...(endedAt === undefined ? {} : { endedAt }),
+		};
+	}
+
 	#taskEntry(id: TaskId): TransactionTask {
 		let task = this.#tasksById.get(id);
 		if (task === undefined) {
@@ -982,7 +1033,10 @@ function planDocument(document: DocumentEntry): DocumentPlan | undefined {
 	}
 }
 
-/** Whether adoption publishes the plan: every creation, copy, and retirement, and a loaded incarnation that changed. */
+/**
+ * Whether adoption publishes the plan: every creation, copy, and retirement, and a loaded incarnation that writes
+ * content, which includes a migration-only base so observers of the older shape receive the new value.
+ */
 function publishes(plan: DocumentPlan): boolean {
-	return plan.retire || plan.change?.loaded === undefined || plan.change.prepared.ops.length > 0;
+	return plan.retire || plan.change?.loaded === undefined || plan.content !== undefined;
 }
