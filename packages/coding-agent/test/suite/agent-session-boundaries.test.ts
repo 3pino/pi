@@ -1017,8 +1017,8 @@ describe("durable length recovery", () => {
 		});
 		harnesses.push(harness);
 		harness.setResponses([
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider finish_reason: network_error" }),
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider finish_reason: network_error" }),
 		]);
 
 		await harness.session.prompt("start");

@@ -109,9 +109,9 @@ describe("AgentSession retry and event characterization", () => {
 		});
 
 		harness.setResponses([
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider finish_reason: network_error" }),
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider finish_reason: network_error" }),
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider finish_reason: network_error" }),
 		]);
 
 		await harness.session.prompt("test");
