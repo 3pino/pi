@@ -7,6 +7,7 @@ import {
 	getLatestPiVersion,
 	isNewerPackageVersion,
 } from "../src/utils/version-check.ts";
+import { FORK_LATEST_RELEASE_URL, forkReleaseResponse, forkTarballUrl } from "./fork-release-test-utils.ts";
 import { allowNetwork } from "./test-network-env.ts";
 
 const originalSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
@@ -35,24 +36,27 @@ describe("version checks", () => {
 	});
 
 	it("returns only newer versions", async () => {
-		const fetchMock = vi.fn(async () => Response.json({ version: "1.2.3" }));
+		const fetchMock = vi.fn(async () => forkReleaseResponse("1.2.3-3pino.2"));
 		vi.stubGlobal("fetch", fetchMock);
 
-		await expect(checkForNewPiVersion("1.2.3")).resolves.toBeUndefined();
-		await expect(checkForNewPiVersion("1.2.2")).resolves.toEqual({ version: "1.2.3" });
+		await expect(checkForNewPiVersion("1.2.3-3pino.2")).resolves.toBeUndefined();
+		await expect(checkForNewPiVersion("1.2.3-3pino.1")).resolves.toEqual({
+			version: "1.2.3-3pino.2",
+			installSpec: forkTarballUrl("1.2.3-3pino.2"),
+		});
 	});
 
-	it("uses the pi.dev version check api with a pi user agent", async () => {
-		const fetchMock = vi.fn(async () => Response.json({ version: "1.2.4" }));
+	it("uses the fork GitHub releases api with a pi user agent", async () => {
+		const fetchMock = vi.fn(async () => forkReleaseResponse("1.2.4"));
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiVersion("1.2.3")).resolves.toBe("1.2.4");
 		expect(fetchMock).toHaveBeenCalledWith(
-			"https://pi.dev/api/latest-version",
+			FORK_LATEST_RELEASE_URL,
 			expect.objectContaining({
 				headers: expect.objectContaining({
 					"User-Agent": expect.stringMatching(/^pi\/1\.2\.3 /),
-					accept: "application/json",
+					accept: "application/vnd.github+json",
 				}),
 			}),
 		);
@@ -63,10 +67,13 @@ describe("version checks", () => {
 			.fn()
 			.mockRejectedValueOnce(new Error("fetch failed"))
 			.mockRejectedValueOnce(new Error("fetch failed"))
-			.mockResolvedValueOnce(Response.json({ version: "1.2.4" }));
+			.mockResolvedValueOnce(forkReleaseResponse("1.2.4"));
 		vi.stubGlobal("fetch", fetchMock);
 
-		await expect(getLatestPiRelease("1.2.3", { retry: true })).resolves.toEqual({ version: "1.2.4" });
+		await expect(getLatestPiRelease("1.2.3", { retry: true })).resolves.toEqual({
+			version: "1.2.4",
+			installSpec: forkTarballUrl("1.2.4"),
+		});
 		expect(fetchMock).toHaveBeenCalledTimes(3);
 	});
 
@@ -89,26 +96,17 @@ describe("version checks", () => {
 		expect(formatVersionCheckError(error)).toBe("fetch failed (ETIMEDOUT, ENETUNREACH)");
 	});
 
-	it("returns the active package metadata from the version check api", async () => {
-		const fetchMock = vi.fn(async () =>
-			Response.json({
-				packageName: "@new-scope/pi",
-				version: "1.2.4",
-			}),
-		);
+	it("ignores releases without a fork tag or tarball", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(Response.json({ tag_name: "v1.2.4", assets: [] }))
+			.mockResolvedValueOnce(
+				Response.json({ tag_name: "fork-v1.2.4", assets: [{ name: "notes.txt", browser_download_url: "x" }] }),
+			);
 		vi.stubGlobal("fetch", fetchMock);
 
-		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({
-			packageName: "@new-scope/pi",
-			version: "1.2.4",
-		});
-	});
-
-	it("returns update notes from the version check api", async () => {
-		const fetchMock = vi.fn(async () => Response.json({ note: " **Read this** ", version: "1.2.4" }));
-		vi.stubGlobal("fetch", fetchMock);
-
-		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({ note: "**Read this**", version: "1.2.4" });
+		await expect(getLatestPiRelease("1.2.3")).resolves.toBeUndefined();
+		await expect(getLatestPiRelease("1.2.3")).resolves.toBeUndefined();
 	});
 
 	it("skips automatic api calls when version checks are disabled", async () => {
@@ -122,7 +120,7 @@ describe("version checks", () => {
 
 	it("allows direct api calls when automatic version checks are disabled", async () => {
 		process.env.PI_SKIP_VERSION_CHECK = "1";
-		const fetchMock = vi.fn(async () => Response.json({ version: "1.2.4" }));
+		const fetchMock = vi.fn(async () => forkReleaseResponse("1.2.4"));
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiVersion("1.2.3")).resolves.toBe("1.2.4");

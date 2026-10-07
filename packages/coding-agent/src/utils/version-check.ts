@@ -2,12 +2,19 @@ import { compare, valid } from "semver";
 import { fetchWithRetry } from "./management-http.ts";
 import { getPiUserAgent } from "./pi-user-agent.ts";
 
-const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
+// 3pino fork: releases are GitHub Releases of the fork, tagged fork-v<version> with the
+// packed coding-agent tarball attached, so self-update never installs the official package.
+export const FORK_REPO = "3pino/pi";
+export const FORK_RELEASES_URL = `https://github.com/${FORK_REPO}/releases`;
+const LATEST_VERSION_URL = `https://api.github.com/repos/${FORK_REPO}/releases/latest`;
+const FORK_TAG_PREFIX = "fork-v";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {
 	version: string;
 	packageName?: string;
+	/** npm install spec for this release; defaults to `<packageName>@<version>`. */
+	installSpec?: string;
 	note?: string;
 }
 
@@ -59,7 +66,7 @@ export async function getLatestPiRelease(
 		{
 			headers: {
 				"User-Agent": getPiUserAgent(currentVersion),
-				accept: "application/json",
+				accept: "application/vnd.github+json",
 			},
 		},
 		{
@@ -70,21 +77,21 @@ export async function getLatestPiRelease(
 	if (!response.ok) return undefined;
 
 	const data = (await response.json()) as {
-		packageName?: unknown;
-		version?: unknown;
-		note?: unknown;
+		tag_name?: unknown;
+		assets?: unknown;
 	};
-	if (typeof data.version !== "string" || !data.version.trim()) {
+	if (typeof data.tag_name !== "string" || !data.tag_name.startsWith(FORK_TAG_PREFIX)) {
 		return undefined;
 	}
-	const packageName =
-		typeof data.packageName === "string" && data.packageName.trim() ? data.packageName.trim() : undefined;
-	const note = typeof data.note === "string" && data.note.trim() ? data.note.trim() : undefined;
-	return {
-		version: data.version.trim(),
-		packageName,
-		...(note ? { note } : {}),
-	};
+	const version = data.tag_name.slice(FORK_TAG_PREFIX.length).trim();
+	const assets = Array.isArray(data.assets)
+		? (data.assets as { name?: unknown; browser_download_url?: unknown }[])
+		: [];
+	const tarball = assets.find((asset) => typeof asset.name === "string" && asset.name.endsWith(".tgz"));
+	if (!version || typeof tarball?.browser_download_url !== "string") {
+		return undefined;
+	}
+	return { version, installSpec: tarball.browser_download_url };
 }
 
 export async function getLatestPiVersion(

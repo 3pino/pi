@@ -5,6 +5,10 @@ pi-coding-agent の 機能追加版 fork です。
 
 - Overload 時のリトライは maxRetries を消費しない
 - package を更新する
+- `pi update` は公式 (pi.dev / npm) ではなく、この fork の GitHub Releases (`fork-v<version>`) から更新する
+
+リリース手順: main を push してから `npm run release:fork` を実行する（`--dry-run` で build・pack・smoke test のみ）。
+バージョンは `<upstream version>-3pino.<n>`。tarball を GitHub Release に添付し、`pi update` はその URL を `npm install -g` する。
 
 upstream と merge しながら開発を進めていきます。個人的なプロジェクトで、PRを送る予定はありません。
 
