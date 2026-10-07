@@ -1,3 +1,33 @@
+> [!NOTE]
+> **これは [earendil-works/pi](https://github.com/earendil-works/pi) の個人用フォーク (3pino fork) です。**
+> 本家との違い:
+> - Provider の overload エラー時のリトライは `retry.maxRetries` を消費せず、上限なしで続ける（待ち時間は最大 60 秒）
+> - `pi update` は公式 (pi.dev / npm) ではなく、このフォークの [GitHub Releases](https://github.com/3pino/pi/releases) から更新する
+>
+> 以降の本家 README にある `pi.dev/install.sh` や `npm install -g @earendil-works/pi-coding-agent` は公式版をインストールするので、このフォークでは使わないでください。
+
+## Quickstart (3pino fork)
+
+Node.js 22.19 以上が必要です。最新のフォーク版をインストールします:
+
+```bash
+npm install -g "$(curl -fsSL https://api.github.com/repos/3pino/pi/releases/latest | grep -o 'https://[^"]*\.tgz' | head -n 1)"
+```
+
+Windows などで上のコマンドが使えない場合は、[Releases](https://github.com/3pino/pi/releases/latest) のリリースノートにある `npm install -g <tarball URL>` を実行してください。
+
+公式版を pi.dev のインストーラで入れている場合は、先にアンインストールしてください（`pi` コマンドが2つ存在して、どちらが起動するかが PATH の順序次第になるため）。npm で公式版を入れている場合は、同じパッケージ名なのでそのまま上書きされます。
+
+### 更新
+
+```bash
+pi update
+```
+
+このフォークの最新リリースを確認し、新しければその tarball を `npm install -g` し直します。起動時にも新しいリリースがあれば通知されます。
+
+---
+
 <p align="center">
   <a href="https://pi.dev">
     <img alt="pi logo" src="https://pi.dev/logo-auto.svg" width="128">

@@ -12,6 +12,8 @@ pi-coding-agent の 機能追加版 fork です。
 
 upstream と merge しながら開発を進めていきます。個人的なプロジェクトで、PRを送る予定はありません。
 
+fork 独自の変更（機能追加、インストール・更新手順の変更など）を加えたら、必要に応じて README.md 先頭の fork 説明部分にも追記・更新すること。
+
 # Development Rules
 
 ## Conversational Style
