@@ -60,11 +60,13 @@ describe("AgentSession retry", () => {
 		maxRetries?: number;
 		maxAgentDelayMs?: number;
 		delayAssistantMessageEndMs?: number;
+		errorMessage?: string;
 	}) {
 		const failCount = options?.failCount ?? 1;
 		const maxRetries = options?.maxRetries ?? 3;
 		const maxAgentDelayMs = options?.maxAgentDelayMs ?? 60000;
 		const delayAssistantMessageEndMs = options?.delayAssistantMessageEndMs ?? 0;
+		const errorMessage = options?.errorMessage ?? "overloaded_error";
 		let callCount = 0;
 
 		const model = getModel("anthropic", "claude-sonnet-4-5")!;
@@ -78,7 +80,7 @@ describe("AgentSession retry", () => {
 					if (callCount <= failCount) {
 						const msg = createAssistantMessage("", {
 							stopReason: "error",
-							errorMessage: "overloaded_error",
+							errorMessage,
 						});
 						stream.push({ type: "start", partial: msg });
 						stream.push({ type: "error", reason: "error", error: msg });
@@ -138,7 +140,11 @@ describe("AgentSession retry", () => {
 	});
 
 	it("exhausts max retries and emits failure", async () => {
-		const created = await createSession({ failCount: 99, maxRetries: 2 });
+		const created = await createSession({
+			failCount: 99,
+			maxRetries: 2,
+			errorMessage: "Provider finish_reason: network_error",
+		});
 		const events: string[] = [];
 		created.session.subscribe((event) => {
 			if (event.type === "auto_retry_start") events.push(`start:${event.attempt}`);
@@ -151,6 +157,21 @@ describe("AgentSession retry", () => {
 		expect(events).toContain("start:1");
 		expect(events).toContain("start:2");
 		expect(events).toContain("end:success=false");
+		expect(created.session.isRetrying).toBe(false);
+	});
+
+	it("does not consume maxRetries for overload errors", async () => {
+		const created = await createSession({ failCount: 4, maxRetries: 1 });
+		const events: string[] = [];
+		created.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") events.push(`start:${event.attempt}/${event.maxAttempts}`);
+			if (event.type === "auto_retry_end") events.push(`end:success=${event.success}`);
+		});
+
+		await created.session.prompt("Test");
+
+		expect(created.getCallCount()).toBe(5);
+		expect(events).toEqual(["start:1/0", "start:2/0", "start:3/0", "start:4/0", "end:success=true"]);
 		expect(created.session.isRetrying).toBe(false);
 	});
 
