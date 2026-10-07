@@ -1,3 +1,13 @@
+# pi 3pino fork
+
+pi-coding-agent の 機能追加版 fork です。
+追加機能:
+
+- Overload 時のリトライは maxRetries を消費しない
+- package を更新する
+
+upstream と merge しながら開発を進めていきます。個人的なプロジェクトで、PRを送る予定はありません。
+
 # Development Rules
 
 ## Conversational Style
