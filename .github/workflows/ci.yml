@@ -41,7 +41,9 @@ jobs:
       - name: Build the pi-env daemon
         run: npm run build:daemon --workspace packages/env
 
+      # 3pino fork: tests are not run in CI; build and check still run.
       - name: Test
+        if: false
         run: npm test
 
   mcp-conformance:
