@@ -97,6 +97,72 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("custom result");
 	});
 
+	test.each(["default", "self"] as const)("%s tool shell renders without vertical padding", (renderShell) => {
+		const definition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderShell,
+			renderCall: () => new Text("call", 0, 0),
+			renderResult: () => new Text("first\n\nlast", 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-compact-shell",
+			{},
+			{},
+			definition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		const indent = renderShell === "default" ? " " : "";
+		expect(component.render(120).map((line) => stripAnsi(line).trimEnd())).toEqual([`${indent}call`]);
+
+		component.updateResult({ content: [{ type: "text", text: "done" }], isError: false });
+		expect(component.render(120).map((line) => stripAnsi(line).trimEnd())).toEqual([
+			`${indent}call`,
+			`${indent}first`,
+			"",
+			`${indent}last`,
+		]);
+	});
+
+	test("self-rendered tool headers remain clickable on the first row", () => {
+		const definition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderShell: "self",
+			renderCall: () => new Text("call", 0, 0),
+			renderResult: (_result, { expanded }) => new Text(expanded ? "expanded result" : "", 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-compact-click",
+			{},
+			{},
+			definition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "done" }], isError: false });
+		const lines = component.render(120);
+		expect(lines).toHaveLength(1);
+		const event: TuiMouseEvent = {
+			type: "click",
+			button: "left",
+			x: 0,
+			y: 0,
+			screenX: 0,
+			screenY: 0,
+			width: 120,
+			height: lines.length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+			clickCount: 1,
+		};
+		expect(component.handleMouse({ ...event, y: 1 })).toBeUndefined();
+		expect(component.handleMouse(event)?.handled).toBe(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("expanded result");
+	});
+
 	test("self-rendered empty tool rows take no layout space", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
@@ -688,6 +754,7 @@ describe("ToolExecutionComponent parity", () => {
 				false,
 			);
 
+			expect(component.render(120)).toHaveLength(1);
 			const collapsed = stripAnsi(component.render(120).join("\n"));
 			expect(collapsed).toContain(scenario.compact);
 			expect(collapsed).not.toContain(scenario.hidden);

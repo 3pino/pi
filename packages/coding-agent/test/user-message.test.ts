@@ -9,19 +9,32 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 const BG_RESET = "\x1b[49m";
 
 describe("UserMessageComponent", () => {
-	test("keeps user message height stable while moving closing OSC markers off line end", () => {
+	test("renders without vertical padding and keeps OSC markers ordered off line end", () => {
 		initTheme("dark");
 
 		const component = new UserMessageComponent("hello");
 		const lines = component.render(20);
 
-		expect(lines).toHaveLength(3);
-		expect(lines[0]).toContain(OSC133_ZONE_START);
+		expect(lines).toHaveLength(1);
+		expect(lines[0].startsWith(OSC133_ZONE_START + OSC133_ZONE_END + OSC133_ZONE_FINAL)).toBe(true);
+		expect(stripAnsi(lines[0]).trimEnd()).toBe(" hello");
 		expect(lines[0].endsWith(BG_RESET)).toBe(true);
+	});
+
+	test("preserves multiline content without surrounding blank lines", () => {
+		initTheme("dark");
+
+		const component = new UserMessageComponent("first\nsecond");
+		const lines = component.render(20);
+
+		expect(lines.map((line) => stripAnsi(line).trimEnd())).toEqual([" first", " second"]);
+		expect(lines[0].startsWith(OSC133_ZONE_START)).toBe(true);
 		expect(lines[0]).not.toContain(OSC133_ZONE_END);
-		expect(lines[1]).toContain("hello");
-		expect(lines[2].startsWith(OSC133_ZONE_END + OSC133_ZONE_FINAL)).toBe(true);
-		expect(lines[2].endsWith(BG_RESET)).toBe(true);
+		expect(lines[1].startsWith(OSC133_ZONE_END + OSC133_ZONE_FINAL)).toBe(true);
+		expect(lines[1].endsWith(BG_RESET)).toBe(true);
+
+		component.setOutputPad(0);
+		expect(component.render(20).map((line) => stripAnsi(line).trimEnd())).toEqual(["first", "second"]);
 	});
 
 	test("chains Markdown transformers with user message context", () => {

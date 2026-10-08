@@ -84,6 +84,26 @@ describe("outputPad", () => {
 		ui.stop();
 	});
 
+	test.each(components.filter(({ name }) => name !== "compaction summary"))(
+		"$name has no surrounding blank lines when collapsed or expanded",
+		({ create }) => {
+			const component = create(1);
+			for (const outputPad of [0, 1]) {
+				component.setOutputPad(outputPad);
+				for (const expanded of [false, true]) {
+					if (component instanceof ToolExecutionComponent || component instanceof BashExecutionComponent) {
+						component.setExpanded(expanded);
+					}
+					component.invalidate();
+					const lines = component.render(60).map((line) => stripAnsi(line).trim());
+					expect(lines.length).toBeGreaterThan(0);
+					expect(lines[0]).not.toBe("");
+					expect(lines.at(-1)).not.toBe("");
+				}
+			}
+		},
+	);
+
 	test.each(components)("$name renders at outputPad 0 and 1", ({ create }) => {
 		const component = create(0);
 		const lines = renderLines(component);

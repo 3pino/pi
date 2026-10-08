@@ -43,7 +43,7 @@ export class UserMessageComponent extends Container {
 			new Markdown(
 				this.text,
 				this.outputPad,
-				1,
+				0,
 				this.markdownTheme,
 				{
 					color: (content: string) => theme.fg("userMessageText", content),
@@ -64,8 +64,8 @@ export class UserMessageComponent extends Container {
 			return lines;
 		}
 
-		lines[0] = OSC133_ZONE_START + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+		lines[0] = OSC133_ZONE_START + lines[0];
 		return lines;
 	}
 }

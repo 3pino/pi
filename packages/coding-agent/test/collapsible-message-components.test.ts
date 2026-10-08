@@ -66,6 +66,29 @@ describe("collapsible message components", () => {
 		expect(renderText(component)).not.toContain("branch details");
 	});
 
+	test.each([0, 1])("skill invocations render without vertical padding at outputPad %s", (outputPad) => {
+		const component = new SkillInvocationMessageComponent(
+			{
+				name: "example-skill",
+				location: "/tmp/example-skill.md",
+				content: "first\n\nlast",
+				userMessage: undefined,
+			},
+			undefined,
+			outputPad,
+		);
+		expect(component.render(WIDTH)).toHaveLength(1);
+		component.setExpanded(true);
+		component.invalidate();
+		const lines = component.render(WIDTH).map((line) => stripAnsi(line).trimEnd());
+		const indent = " ".repeat(outputPad);
+		expect(lines[0]).toBe(`${indent}[skill]`);
+		expect(lines.at(-1)).toBe(`${indent}last`);
+		const firstRow = lines.indexOf(`${indent}first`);
+		expect(firstRow).toBeGreaterThan(-1);
+		expect(lines[firstRow + 1]).toBe("");
+	});
+
 	test("toggles a skill invocation when clicked", () => {
 		const component = new SkillInvocationMessageComponent({
 			name: "example-skill",
