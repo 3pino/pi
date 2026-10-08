@@ -4,6 +4,7 @@
 > - Provider の overload エラー時のリトライは `retry.maxRetries` を消費せず、上限なしで続ける（待ち時間は最大 60 秒）
 > - `pi update` は公式 (pi.dev / npm) ではなく、このフォークの [GitHub Releases](https://github.com/3pino/pi/releases) から更新する
 > - 対話画面のユーザー発言・`[skill]` 表示・ツール実行・`!` コマンド出力には、上下の空白行を付けない
+> - テキスト入力欄は、角を丸めた上下左右の枠で囲む
 >
 > 以降の本家 README にある `pi.dev/install.sh` や `npm install -g @earendil-works/pi-coding-agent` は公式版をインストールするので、このフォークでは使わないでください。
 

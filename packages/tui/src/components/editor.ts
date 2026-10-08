@@ -240,6 +240,8 @@ export interface EditorTheme {
 }
 
 export interface EditorOptions {
+	/** Enclose the input in a rounded frame instead of horizontal rules. */
+	sideBorders?: boolean;
 	paddingX?: number;
 	autocompleteMaxVisible?: number;
 }
@@ -306,6 +308,7 @@ export class Editor implements Component, Focusable {
 	protected tui: TUI;
 	private theme: EditorTheme;
 	private paddingX: number = 0;
+	private sideBorders: boolean;
 
 	// Store last render geometry for cursor navigation and mouse hit-testing.
 	private lastWidth: number = 80;
@@ -374,6 +377,7 @@ export class Editor implements Component, Focusable {
 		this.tui = tui;
 		this.theme = theme;
 		this.borderColor = theme.borderColor;
+		this.sideBorders = options.sideBorders ?? false;
 		const paddingX = options.paddingX ?? 0;
 		this.paddingX = Number.isFinite(paddingX) ? Math.max(0, Math.floor(paddingX)) : 0;
 		const maxVisible = options.autocompleteMaxVisible ?? 5;
@@ -517,10 +521,23 @@ export class Editor implements Component, Focusable {
 		return this.borderColor(border);
 	}
 
-	render(width: number): string[] {
-		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
+	private getRenderGeometry(width: number): {
+		borderWidth: number;
+		innerWidth: number;
+		paddingX: number;
+		contentWidth: number;
+	} {
+		// Very narrow terminals need the space for text and the cursor, not a frame.
+		const borderWidth = this.sideBorders && width >= 5 ? 1 : 0;
+		const innerWidth = width - borderWidth * 2;
+		// Keep room for wide graphemes inside the frame, even with large padding.
+		const maxPadding = Math.max(0, Math.floor((innerWidth - (borderWidth ? 2 : 1)) / 2));
 		const paddingX = Math.min(this.paddingX, maxPadding);
-		const contentWidth = Math.max(1, width - paddingX * 2);
+		return { borderWidth, innerWidth, paddingX, contentWidth: Math.max(1, innerWidth - paddingX * 2) };
+	}
+
+	render(width: number): string[] {
+		const { borderWidth, innerWidth, paddingX, contentWidth } = this.getRenderGeometry(width);
 
 		// Layout width: with padding the cursor can overflow into it,
 		// without padding we reserve 1 column for the cursor.
@@ -558,9 +575,14 @@ export class Editor implements Component, Focusable {
 		const result: string[] = [];
 		const leftPadding = " ".repeat(paddingX);
 		const rightPadding = leftPadding;
+		const sideBorder = borderWidth ? this.borderColor("│") : "";
 
 		// Render top border (with scroll indicator if scrolled down)
-		result.push(this.renderTopBorder(width, this.scrollOffset));
+		result.push(
+			(borderWidth ? this.borderColor("╭") : "") +
+				this.renderTopBorder(innerWidth, this.scrollOffset) +
+				(borderWidth ? this.borderColor("╮") : ""),
+		);
 
 		// Render each visible layout line
 		// Emit hardware cursor marker when focused so TUI can position the
@@ -606,13 +628,16 @@ export class Editor implements Component, Focusable {
 			const padding = " ".repeat(Math.max(0, contentWidth - lineVisibleWidth));
 			const lineRightPadding = cursorInPadding ? rightPadding.slice(1) : rightPadding;
 
-			// Render the line (no side borders, just horizontal lines above and below)
-			result.push(`${leftPadding}${displayText}${padding}${lineRightPadding}`);
+			result.push(`${sideBorder}${leftPadding}${displayText}${padding}${lineRightPadding}${sideBorder}`);
 		}
 
 		// Render bottom border (with scroll indicator if more content below)
 		const linesBelow = layoutLines.length - (this.scrollOffset + visibleLines.length);
-		result.push(this.renderBottomBorder(width, linesBelow));
+		result.push(
+			(borderWidth ? this.borderColor("╰") : "") +
+				this.renderBottomBorder(innerWidth, linesBelow) +
+				(borderWidth ? this.borderColor("╯") : ""),
+		);
 
 		// Add autocomplete list if active
 		this.renderedAutocompleteHeight = 0;
@@ -622,7 +647,9 @@ export class Editor implements Component, Focusable {
 			for (const line of autocompleteResult) {
 				const lineWidth = visibleWidth(line);
 				const linePadding = " ".repeat(Math.max(0, contentWidth - lineWidth));
-				result.push(`${leftPadding}${line}${linePadding}${rightPadding}`);
+				// The picker sits outside the frame, aligned with the input text.
+				const borderPadding = " ".repeat(borderWidth);
+				result.push(`${borderPadding}${leftPadding}${line}${linePadding}${rightPadding}${borderPadding}`);
 			}
 		}
 
@@ -630,6 +657,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		const { borderWidth, paddingX, contentWidth } = this.getRenderGeometry(event.width);
 		const autocompleteStartRow = this.renderedVisibleLineCount + 2;
 		if (
 			this.autocompleteState &&
@@ -637,12 +665,9 @@ export class Editor implements Component, Focusable {
 			event.y >= autocompleteStartRow &&
 			event.y < autocompleteStartRow + this.renderedAutocompleteHeight
 		) {
-			const maxPadding = Math.max(0, Math.floor((event.width - 1) / 2));
-			const paddingX = Math.min(this.paddingX, maxPadding);
-			const contentWidth = Math.max(1, event.width - paddingX * 2);
 			const result = this.autocompleteList.handleMouse?.({
 				...event,
-				x: event.x - paddingX,
+				x: event.x - borderWidth - paddingX,
 				y: event.y - autocompleteStartRow,
 				width: contentWidth,
 				height: this.renderedAutocompleteHeight,
@@ -664,9 +689,7 @@ export class Editor implements Component, Focusable {
 		const logicalLine = this.state.lines[visualLine.logicalLine] ?? "";
 		const chunkEnd = visualLine.startCol + visualLine.length;
 		const chunk = logicalLine.slice(visualLine.startCol, chunkEnd);
-		const maxPadding = Math.max(0, Math.floor((event.width - 1) / 2));
-		const paddingX = Math.min(this.paddingX, maxPadding);
-		const targetColumn = Math.max(0, event.x - paddingX);
+		const targetColumn = Math.max(0, event.x - borderWidth - paddingX);
 		let visibleColumn = 0;
 		let targetIndex = chunk.length;
 		let lastGraphemeIndex = 0;

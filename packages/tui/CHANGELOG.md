@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `EditorOptions.sideBorders` to enclose the input in a rounded frame (3pino fork)
 - Added `Box.setPaddingX(...)` and `Text.setPaddingX(...)` ([#10557](https://github.com/earendil-works/pi/pull/10557) by [@rwachtler](https://github.com/rwachtler))
 
 ## [1.0.4] - 2026-10-05

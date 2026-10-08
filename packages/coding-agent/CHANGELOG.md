@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Enclosed the interactive text input in a rounded frame with side borders (3pino fork)
 - Removed vertical padding and separator blank lines around user messages and skill invocations, and vertical padding around tool executions and `!` command output in the interactive UI (3pino fork)
 - Changed `outputPad` to also apply to `!` command output, tool output, and summary blocks ([#9946](https://github.com/earendil-works/pi/issues/9946), [#10557](https://github.com/earendil-works/pi/pull/10557) by [@rwachtler](https://github.com/rwachtler))
 
