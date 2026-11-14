@@ -12,7 +12,14 @@ import {
 	type TerminalColorScheme,
 	type TerminalColors,
 } from "./terminal-colors.ts";
-import { getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.ts";
+import {
+	getCapabilities,
+	getImageLineExtent,
+	getMaxKittyImageRows,
+	isImageLine,
+	setCellDimensions,
+	stripImageSequences,
+} from "./terminal-image.ts";
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
 
 /**
@@ -135,6 +142,12 @@ export interface Component {
 	wantsKeyRelease?: boolean;
 
 	/**
+	 * If true while focused, fullscreen viewport keys (`tui.altScreen.*` scrolling and prompt jumps) go to this
+	 * component instead of scrolling the transcript, as they do for a focused overlay. Default is false.
+	 */
+	capturesViewportInput?: boolean;
+
+	/**
 	 * Invalidate any cached rendering state.
 	 * Called when theme changes or when component needs to re-render from scratch.
 	 */
@@ -194,6 +207,17 @@ export function isFocusable(component: Component | null): component is Component
  * TUI finds and strips this marker, then positions the hardware cursor there.
  */
 export const CURSOR_MARKER = "\x1b_pi:c\x07";
+
+/** Fake cursor markers - zero-width APC sequences around the text drawn as the cursor. See resolveFakeCursors(). */
+export const FAKE_CURSOR_START = "\x1b_pi:fc\x07";
+export const FAKE_CURSOR_END = "\x1b_pi:/fc\x07";
+// CURSOR_MARKER + FAKE_CURSOR_START + text + FAKE_CURSOR_END. Truncating the line right after the cursor cell drops the end.
+const FOCUSED_FAKE_CURSOR = /(\x1b_pi:c\x07)\x1b_pi:fc\x07(.*?)(?:\x1b_pi:\/fc\x07|$)/s;
+
+/** Wrap text in fake cursor markers. */
+export function renderFakeCursor(text: string): string {
+	return `${FAKE_CURSOR_START}${text}${FAKE_CURSOR_END}`;
+}
 
 export { visibleWidth };
 
@@ -443,6 +467,33 @@ export function compositeTuiLine(
 	return visibleWidth(result) <= totalWidth ? result : sliceByColumn(result, 0, totalWidth, true);
 }
 
+/**
+ * Drop image placements that intersect an overlay rectangle (`row` is viewport-relative).
+ * Terminals draw images above text, so an overlay cannot paint over them. The renderers delete a
+ * placement once its line changes and draw it again when the overlay no longer covers it.
+ * Images beside the overlay stay; on the row holding such an image's sequence the overlay is not
+ * drawn, because `compositeTuiLine` passes image lines through.
+ */
+function hideImagesUnderOverlay(lines: string[], overlay: OverlayBounds, viewportStart: number): void {
+	if (overlay.height === 0) return;
+	// Kitty images extend downward, so an image line above the viewport can still reach into it.
+	for (let index = Math.max(0, viewportStart - getMaxKittyImageRows()); index < lines.length; index++) {
+		const line = lines[index]!;
+		const extent = getImageLineExtent(line);
+		if (!extent) continue;
+		const firstRow = index + extent.firstRow - viewportStart;
+		const lastRow = index + extent.lastRow - viewportStart;
+		if (
+			firstRow < overlay.row + overlay.height &&
+			lastRow >= overlay.row &&
+			extent.startCol < overlay.col + overlay.width &&
+			extent.endCol > overlay.col
+		) {
+			lines[index] = stripImageSequences(line);
+		}
+	}
+}
+
 export type TuiMode = "regular" | "fullscreen";
 
 export interface TuiStopOptions {
@@ -549,6 +600,29 @@ export abstract class TuiBase extends Container implements TUI {
 	protected beforeTerminalStop(_options: TuiStopOptions): void {}
 
 	protected afterTerminalStop(_options: TuiStopOptions): void {}
+
+	/** Mode resets written before the terminal's own resets when the process exits without stop(). */
+	protected getExitRestorePrefix(): string {
+		return `${this.terminalColorSchemeNotificationsEnabled ? "\x1b[?2031l" : ""}\x1b[?25h`;
+	}
+
+	/** Mode resets written after the terminal's own resets when the process exits without stop(). */
+	protected getExitRestoreSuffix(): string {
+		return "";
+	}
+
+	/**
+	 * Last-resort restore for exit paths that skip stop(), e.g. a direct process.exit() (#11170).
+	 * Hard kills and native aborts run no JavaScript and cannot be covered.
+	 */
+	private readonly exitRestoreHandler = (): void => {
+		if (this.stopped) return;
+		try {
+			this.terminal.restoreOnExit?.(this.getExitRestorePrefix(), this.getExitRestoreSuffix());
+		} catch {
+			// Never throw from an exit handler.
+		}
+	};
 
 	get fullRedraws(): number {
 		return this.fullRedrawCount;
@@ -915,6 +989,8 @@ export abstract class TuiBase extends Container implements TUI {
 
 	start(): void {
 		this.stopped = false;
+		process.off("exit", this.exitRestoreHandler);
+		process.on("exit", this.exitRestoreHandler);
 		this.beforeTerminalStart();
 		this.terminal.start(
 			(data) => this.handleTerminalInput(data),
@@ -969,6 +1045,7 @@ export abstract class TuiBase extends Container implements TUI {
 
 	stop(options: TuiStopOptions = {}): void {
 		this.stopped = true;
+		process.off("exit", this.exitRestoreHandler);
 		this.cancelRenderTimer();
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
@@ -1359,7 +1436,7 @@ export abstract class TuiBase extends Container implements TUI {
 			const { width, maxHeight } = this.resolveOverlayLayout(options, 0, termWidth, termHeight);
 
 			// Render component at calculated width
-			let overlayLines = component.render(width);
+			let overlayLines = this.resolveFakeCursors(component.render(width));
 
 			// Apply maxHeight if specified
 			if (maxHeight !== undefined && overlayLines.length > maxHeight) {
@@ -1393,8 +1470,9 @@ export abstract class TuiBase extends Container implements TUI {
 
 		const viewportStart = Math.max(0, workingHeight - termHeight);
 
-		// Composite each overlay
+		// Composite each overlay, back to front. Hiding images per overlay also hides images drawn by overlays below it.
 		for (const { overlayLines, row, col, w } of rendered) {
+			hideImagesUnderOverlay(result, { row, col, width: w, height: overlayLines.length }, viewportStart);
 			for (let i = 0; i < overlayLines.length; i++) {
 				const idx = viewportStart + row + i;
 				if (idx >= 0 && idx < result.length) {
@@ -1415,7 +1493,8 @@ export abstract class TuiBase extends Container implements TUI {
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			if (!isImageLine(line)) {
-				lines[i] = normalizeTerminalOutput(line) + reset;
+				// Cursor markers are internal render metadata and must never reach terminal output.
+				lines[i] = normalizeTerminalOutput(line.replaceAll(CURSOR_MARKER, "")) + reset;
 			}
 		}
 		return lines;
@@ -1450,13 +1529,27 @@ export abstract class TuiBase extends Container implements TUI {
 				const beforeMarker = line.slice(0, markerIndex);
 				const col = visibleWidth(beforeMarker);
 
-				// Strip marker from the line
-				lines[row] = line.slice(0, markerIndex) + line.slice(markerIndex + CURSOR_MARKER.length);
+				// Strip all markers from the selected line. The first marker determines the
+				// hardware cursor position; any others are stale internal sentinels.
+				lines[row] = line.replaceAll(CURSOR_MARKER, "");
 
 				return { row, col };
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Resolve fake cursor markers to reverse video. When the hardware cursor is shown, a fake cursor
+	 * directly after CURSOR_MARKER is dropped because the terminal cursor is drawn there. Fake cursors
+	 * of components without focus have no CURSOR_MARKER and stay visible.
+	 */
+	protected resolveFakeCursors(lines: string[]): string[] {
+		return lines.map((line) => {
+			if (!line.includes(FAKE_CURSOR_START)) return line;
+			const resolved = this.showHardwareCursor ? line.replace(FOCUSED_FAKE_CURSOR, "$1$2") : line;
+			return resolved.replaceAll(FAKE_CURSOR_START, "\x1b[7m").replaceAll(FAKE_CURSOR_END, "\x1b[27m");
+		});
 	}
 
 	/**
