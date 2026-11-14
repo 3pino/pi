@@ -21,13 +21,13 @@ upstream と merge しながら開発を進めていきます。個人的なプ�
 
 Secret `UPSTREAM_SYNC_TOKEN` を設定すると、同期 PR の CI が走り main への merge でも CI が走る。未設定だと `GITHUB_TOKEN` にフォールバックし、`GITHUB_TOKEN` が作ったイベントでは workflow が起動しないため、PR は自動マージされずに残る。
 
-必要な権限（fine-grained PAT、このリポジトリのみ）: Contents / Pull requests / Issues / Actions / Workflows の write。classic PAT なら `repo` + `workflow`。
+必要な権限（fine-grained PAT、このリポジトリのみ）: Contents / Pull requests / Actions / Workflows の write。classic PAT なら `repo` + `workflow`。
 
 ```sh
 gh secret set UPSTREAM_SYNC_TOKEN -R 3pino/pi
 ```
 
-コンフリクトが `FORK_OURS_FILES` 以外で起きた場合は自動化が止まるので、手元で merge して解決し、push 後にリリースする。既存の同期 PR があればその PR にコメントし、無ければ Issue を作る（この fork は Issues 無効なので、その場合は workflow が失敗して summary に一覧が出る）。
+コンフリクトが `FORK_OURS_FILES` 以外で起きた場合は自動化が止まるので、手元で merge して解決し、push 後にリリースする。既存の同期 PR があればその PR にコメントし、無ければ workflow を失敗させて summary に一覧を出す（この fork は Issues 無効なので Issue は使わない）。
 
 `FORK_OURS_FILES` に追加すると、そのパスの upstream 側の変更が恒久的に取り込まれなくなる。CI の変更などを追いたくなったら一度手で解決し、リストから外す。
 

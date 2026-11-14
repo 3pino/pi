@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: write
-  issues: write
   pull-requests: write
 
 concurrency:
@@ -168,23 +167,10 @@ jobs:
             exit 0
           fi
 
-          title="upstream-sync: upstream/${UPSTREAM_BRANCH} cannot be merged automatically"
-          if ! gh issue list --limit 1 >/dev/null 2>"$RUNNER_TEMP/issue-error.txt"; then
-            # Issues may be disabled on the fork; fail the run so the conflict is visible.
-            cat "$RUNNER_TEMP/conflict-body.md" >> "$GITHUB_STEP_SUMMARY"
-            cat "$RUNNER_TEMP/issue-error.txt"
-            echo "::error::Merging upstream/${UPSTREAM_BRANCH} conflicts in fork-modified files; resolve them by hand"
-            exit 1
-          fi
-
-          existing=$(gh issue list --state open --json number,title \
-            --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body-file "$RUNNER_TEMP/conflict-body.md"
-            echo "Commented on issue #$existing"
-          else
-            gh issue create --title "$title" --body-file "$RUNNER_TEMP/conflict-body.md"
-          fi
+          # Issues are disabled on the fork, so surface the conflict on the run itself.
+          cat "$RUNNER_TEMP/conflict-body.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::Merging upstream/${UPSTREAM_BRANCH} conflicts in fork-modified files; resolve them by hand"
+          exit 1
 
       - name: Summary
         run: |
