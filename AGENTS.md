@@ -7,10 +7,29 @@ pi-coding-agent の 機能追加版 fork です。
 - package を更新する
 - `pi update` は公式 (pi.dev / npm) ではなく、この fork の GitHub Releases (`fork-v<version>`) から更新する
 
-リリース手順: main を push してから `npm run release:fork` を実行する（`--dry-run` で build・pack・smoke test のみ）。
-バージョンは `<upstream version>-3pino.<n>`。tarball を GitHub Release に添付し、`pi update` はその URL を `npm install -g` する。
+リリース手順: main を push してから `npm run release:fork` を実行する（`--dry-run` で build・pack・smoke test のみ）。upstream merge 後は `Fork release` workflow が自動でリリースする。バージョンは `<upstream version>-3pino.<n>`。tarball を GitHub Release に添付し、`pi update` はその URL を `npm install -g` する。
 
 upstream と merge しながら開発を進めていきます。個人的なプロジェクトで、PRを送る予定はありません。
+
+# Upstream sync
+
+本家の追従は GitHub Actions で自動化している。
+
+- `.github/workflows/upstream-sync.yml`（毎日 06:00 JST + 手動 dispatch）: `upstream/main` を `upstream-sync` ブランチに merge して PR を作る。コンフリクトしたファイルが `FORK_OURS_FILES`（`ci.yml`, `nix/model-catalog.json`）だけなら fork 側を採用して続行し、それ以外がコンフリクトしたら merge を中止して報告する。
+- `.github/workflows/upstream-auto-merge.yml`: `upstream-sync` PR の CI が成功したら merge し、リリースを dispatch する。
+- `.github/workflows/fork-release.yml`: `scripts/fork-release.mjs` を実行して `fork-v<version>` を公開する。現在の upstream バージョンに fork リリースが既にあればスキップする（`force` で強制、`dry_run` で build・pack・smoke test のみ）。main の `packages/coding-agent/package.json` の push でも起動する。
+
+Secret `UPSTREAM_SYNC_TOKEN` を設定すると、同期 PR の CI が走り main への merge でも CI が走る。未設定だと `GITHUB_TOKEN` にフォールバックし、`GITHUB_TOKEN` が作ったイベントでは workflow が起動しないため、PR は自動マージされずに残る。
+
+必要な権限（fine-grained PAT、このリポジトリのみ）: Contents / Pull requests / Issues / Actions / Workflows の write。classic PAT なら `repo` + `workflow`。
+
+```sh
+gh secret set UPSTREAM_SYNC_TOKEN -R 3pino/pi
+```
+
+コンフリクトが `FORK_OURS_FILES` 以外で起きた場合は自動化が止まるので、手元で merge して解決し、push 後にリリースする。既存の同期 PR があればその PR にコメントし、無ければ Issue を作る（この fork は Issues 無効なので、その場合は workflow が失敗して summary に一覧が出る）。
+
+`FORK_OURS_FILES` に追加すると、そのパスの upstream 側の変更が恒久的に取り込まれなくなる。CI の変更などを追いたくなったら一度手で解決し、リストから外す。
 
 fork 独自の変更（機能追加、インストール・更新手順の変更など）を加えたら、必要に応じて README.md 先頭の fork 説明部分にも追記・更新すること。
 

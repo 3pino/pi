@@ -1,0 +1,78 @@
+name: Fork release
+
+# 3pino fork: publish the coding-agent tarball as a fork-v<version> GitHub
+# Release, which `pi update` installs. Runs after an upstream merge (dispatched
+# by upstream-auto-merge.yml) or when a version bump lands on main. Releases are
+# skipped when the current upstream version already has a fork release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Release even if this upstream version already has a fork release
+        type: boolean
+        default: false
+      dry_run:
+        description: Build, pack, and smoke test without creating the release
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - packages/coding-agent/package.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Skip an already released upstream version
+        id: gate
+        run: |
+          base=$(node -p "require('./packages/coding-agent/package.json').version")
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.force }}" = "true" ] || [ "${{ inputs.dry_run }}" = "true" ]; then
+            exit 0
+          fi
+          if git ls-remote --tags origin "refs/tags/fork-v${base}-3pino.*" | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::fork-v${base}-3pino.* is already released"
+          fi
+
+      - name: Build, pack, and release
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+        run: |
+          args=()
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          node scripts/fork-release.mjs "${args[@]+"${args[@]}"}"

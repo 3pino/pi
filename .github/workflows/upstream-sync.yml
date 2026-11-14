@@ -1,0 +1,194 @@
+name: Upstream sync
+
+# 3pino fork: merge earendil-works/pi into this fork once a day and open a PR.
+# The PR is merged and released by upstream-auto-merge.yml / fork-release.yml
+# when CI passes. Files in FORK_OURS_FILES keep the fork version on conflict;
+# any other conflict aborts the merge and reports it in an issue.
+
+on:
+  schedule:
+    # 06:00 JST
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: earendil-works/pi
+  UPSTREAM_BRANCH: main
+  SYNC_BRANCH: upstream-sync
+  # Resolve conflicts in these paths with the fork version. Everything else must
+  # be merged by hand.
+  FORK_OURS_FILES: |
+    .github/workflows/ci.yml
+    nix/model-catalog.json
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" \
+            || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+
+      - name: Check for upstream changes
+        id: upstream
+        run: |
+          if git merge-base --is-ancestor "upstream/${UPSTREAM_BRANCH}" HEAD; then
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+            echo "upstream/${UPSTREAM_BRANCH} is already merged"
+            exit 0
+          fi
+          echo "changes=true" >> "$GITHUB_OUTPUT"
+          git log --oneline "HEAD..upstream/${UPSTREAM_BRANCH}" | tee "$RUNNER_TEMP/commits.txt"
+          echo "count=$(git rev-list --count "HEAD..upstream/${UPSTREAM_BRANCH}")" >> "$GITHUB_OUTPUT"
+
+      - name: Merge upstream
+        id: merge
+        if: steps.upstream.outputs.changes == 'true'
+        run: |
+          git switch -c "$SYNC_BRANCH"
+          if git merge --no-ff --no-edit -m "Merge upstream/${UPSTREAM_BRANCH}" "upstream/${UPSTREAM_BRANCH}"; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          resolved=()
+          unresolved=()
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            if printf '%s\n' $FORK_OURS_FILES | grep -qxF -- "$file"; then
+              echo "Keeping the fork version of $file"
+              git checkout --ours -- "$file"
+              git add -- "$file"
+              resolved+=("$file")
+            else
+              echo "Conflicting with upstream: $file"
+              unresolved+=("$file")
+            fi
+          done < <(git diff --name-only --diff-filter=U | sort -u)
+
+          if [ ${#resolved[@]} -gt 0 ]; then printf '%s\n' "${resolved[@]}" > "$RUNNER_TEMP/resolved.txt"; fi
+          if [ ${#unresolved[@]} -gt 0 ]; then printf '%s\n' "${unresolved[@]}" > "$RUNNER_TEMP/unresolved.txt"; fi
+
+          if [ ${#unresolved[@]} -gt 0 ]; then
+            git merge --abort
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git commit --no-edit
+          echo "clean=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push branch and open pull request
+        if: steps.upstream.outputs.changes == 'true' && steps.merge.outputs.clean == 'true'
+        env:
+          UPSTREAM_COUNT: ${{ steps.upstream.outputs.count }}
+        run: |
+          git push --force origin "$SYNC_BRANCH"
+
+          {
+            echo "Automated merge of \`upstream/${UPSTREAM_BRANCH}\` into \`main\` (${UPSTREAM_COUNT} commits)."
+            echo
+            echo "### Upstream commits"
+            echo
+            echo '```'
+            head -n 30 "$RUNNER_TEMP/commits.txt"
+            echo '```'
+            if [ -s "$RUNNER_TEMP/resolved.txt" ]; then
+              echo
+              echo "### Conflicts resolved with the fork version"
+              echo
+              sed 's/^/- `/' "$RUNNER_TEMP/resolved.txt" | sed 's/$/`/'
+            fi
+            echo
+            echo "CI is required before this PR is merged and released automatically."
+          } > "$RUNNER_TEMP/pr-body.md"
+
+          title="Merge upstream/${UPSTREAM_BRANCH} (${UPSTREAM_COUNT} commits, $(date -u +%Y-%m-%d))"
+          existing=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+            echo "Updated PR #$existing"
+          else
+            gh pr create --base main --head "$SYNC_BRANCH" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+          fi
+
+      - name: Report merge conflicts
+        if: steps.upstream.outputs.changes == 'true' && steps.merge.outputs.clean == 'false'
+        run: |
+          {
+            echo "Merging \`upstream/${UPSTREAM_BRANCH}\` into \`main\` conflicts in files that the fork changes."
+            echo "Resolve them locally:"
+            echo
+            echo '```sh'
+            echo "git fetch https://github.com/${UPSTREAM_REPO}.git ${UPSTREAM_BRANCH}"
+            echo "git switch -c ${SYNC_BRANCH} main"
+            echo "git merge --no-ff FETCH_HEAD"
+            echo '```'
+            echo
+            echo "### Conflicting files"
+            echo
+            sed 's/^/- `/' "$RUNNER_TEMP/unresolved.txt" | sed 's/$/`/'
+            echo
+            echo "### Upstream commits"
+            echo
+            echo '```'
+            head -n 30 "$RUNNER_TEMP/commits.txt"
+            echo '```'
+          } > "$RUNNER_TEMP/conflict-body.md"
+
+          pr=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            gh pr comment "$pr" --body-file "$RUNNER_TEMP/conflict-body.md"
+            echo "Commented on PR #$pr"
+            exit 0
+          fi
+
+          title="upstream-sync: upstream/${UPSTREAM_BRANCH} cannot be merged automatically"
+          if ! gh issue list --limit 1 >/dev/null 2>"$RUNNER_TEMP/issue-error.txt"; then
+            # Issues may be disabled on the fork; fail the run so the conflict is visible.
+            cat "$RUNNER_TEMP/conflict-body.md" >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/issue-error.txt"
+            echo "::error::Merging upstream/${UPSTREAM_BRANCH} conflicts in fork-modified files; resolve them by hand"
+            exit 1
+          fi
+
+          existing=$(gh issue list --state open --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/conflict-body.md"
+            echo "Commented on issue #$existing"
+          else
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/conflict-body.md"
+          fi
+
+      - name: Summary
+        run: |
+          {
+            echo "changes: ${{ steps.upstream.outputs.changes }}"
+            echo "clean merge: ${{ steps.merge.outputs.clean }}"
+          } >> "$GITHUB_STEP_SUMMARY"

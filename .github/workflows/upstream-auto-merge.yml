@@ -1,0 +1,54 @@
+name: Upstream auto-merge
+
+# 3pino fork: merge the upstream-sync PR once CI passes, then publish a fork
+# release. Uses UPSTREAM_SYNC_TOKEN when present so the merge also triggers CI
+# on main; workflow_dispatch is used for the release because events created with
+# GITHUB_TOKEN do not start new workflow runs.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-auto-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_branch == 'upstream-sync'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Merge the sync pull request
+        id: merge
+        run: |
+          number=$(gh pr list --head upstream-sync --state open --json number --jq '.[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "No open upstream-sync pull request"
+            exit 0
+          fi
+
+          head=$(gh pr view "$number" --json headRefOid --jq .headRefOid)
+          if [ "$head" != "$RUN_HEAD_SHA" ]; then
+            echo "PR #$number head moved to $head; waiting for the CI run of that commit"
+            exit 0
+          fi
+
+          gh pr merge "$number" --merge --delete-branch
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger the fork release
+        if: steps.merge.outputs.merged == 'true'
+        run: gh workflow run fork-release.yml --ref main

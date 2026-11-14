@@ -28,6 +28,8 @@ pi update
 
 このフォークの最新リリースを確認し、新しければその tarball を `npm install -g` し直します。起動時にも新しいリリースがあれば通知されます。
 
+本家の更新は毎日確認され、コンフリクトなく取り込めれば自動でリリースされます（`.github/workflows/upstream-sync.yml`）。コンフリクトが起きたときだけ手元での解決が必要です。
+
 ---
 
 <p align="center">
