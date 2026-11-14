@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { Editor } from "../src/components/editor.ts";
-import { CURSOR_MARKER, type TuiMouseEvent } from "../src/tui.ts";
+import { CURSOR_MARKER, FAKE_CURSOR_END, FAKE_CURSOR_START, type TuiMouseEvent } from "../src/tui.ts";
 import { TuiMainScreen } from "../src/tui-main-screen.ts";
 import { visibleWidth } from "../src/utils.ts";
 import { defaultEditorTheme } from "./test-themes.ts";
@@ -32,16 +32,19 @@ function click(x: number, y: number, width: number): TuiMouseEvent {
 	};
 }
 
+/** Drop internal cursor markers, which only the TUI consumes. */
+function stripCursorMarkers(line: string): string {
+	return stripVTControlCharacters(
+		line.replaceAll(CURSOR_MARKER, "").replaceAll(FAKE_CURSOR_START, "").replaceAll(FAKE_CURSOR_END, ""),
+	);
+}
+
 describe("Editor frame", () => {
 	it("encloses empty and multiline input with rounded corners", () => {
 		const editor = createEditor();
-		assert.deepEqual(editor.render(12).map(stripVTControlCharacters), [
-			"╭──────────╮",
-			"│          │",
-			"╰──────────╯",
-		]);
+		assert.deepEqual(editor.render(12).map(stripCursorMarkers), ["╭──────────╮", "│          │", "╰──────────╯"]);
 		editor.setText("hello\n世界");
-		assert.deepEqual(editor.render(12).map(stripVTControlCharacters), [
+		assert.deepEqual(editor.render(12).map(stripCursorMarkers), [
 			"╭──────────╮",
 			"│ hello    │",
 			"│ 世界     │",
@@ -68,7 +71,7 @@ describe("Editor frame", () => {
 	it("lets an end cursor use padding without overwriting the right border", () => {
 		const editor = createEditor();
 		editor.setText("abcdefgh");
-		assert.equal(stripVTControlCharacters(editor.render(12)[1]!), "│ abcdefgh │");
+		assert.equal(stripCursorMarkers(editor.render(12)[1]!), "│ abcdefgh │");
 		assert.equal(visibleWidth(editor.render(12)[1]!), 12);
 	});
 
