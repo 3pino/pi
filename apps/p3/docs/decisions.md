@@ -282,3 +282,94 @@ older entries that say `docs/<file>` or `apps/p3/docs/<file>` now are `apps/p3/d
   (2026-11-14, private: `research/p3-people-2026-11-13/resources-vs-locks-adm-fable.md`) recommends locks (one owner
   leaves only restriction; several times smaller to build and for plugin authors) and three of its ideas for locks,
   open in slice 6.
+- **Slices give p2's features, clean (owner, 2026-11-14: "we need a clear spec for each slice that ensures we have the
+  features of p2, but clean and extensible where appropriate"):** no audit of the conversation's history ("we'll
+  encounter shit anyways"); instead each slice's details start with p2's features in its area (p2's code, the
+  functionality map `apps/p2/docs/p3-functions/`), each built, carried to a named slice, or proposed to drop.
+- **Fundamentals first; Chord fixed from an analysis of all features (owner, 2026-11-14):** p2's features first, then
+  what p3 adds (admission, people and apps, locks, org), each a small, finely scoped slice built and iterated until
+  clean ("on paper is useless" for p3's features). How Chord must change comes from Fable's analysis of p2's features
+  and p3's planned ones: the small set of primitives that lets all of them be built cleanly ("directionally chord is
+  likely ok, unless fable has a brilliant new idea that simplifies everything").
+- **Recovering a person who lost their only device (owner, 2026-11-14):** a person signed in on one device only (no
+  identity provider, no paired device) who loses that sign-in cannot get back in alone; that is accepted, as long as the
+  owner can send a new invite that binds to the same person (their sessions and data stay theirs). Slice 5 builds it.
+- **Persons, guests and links (owner, 2026-11-14, voice):** there is one kind of person; what a person reaches is data,
+  never their principal. The principal kinds stay `owner`, `person`, `worker`, `server` (no `guest` kind: a kind of its
+  own would make every plugin care). Two kinds of rows point at a person: an app membership (person, app, role) and a
+  session share (person, session, read or write); anyone may have both. A session shared with someone already on the
+  Pi needs no invite: a share row is added. One link mechanism with a target and a use rule: an app invite (join app
+  X as role R, single use by default) and a session share link (session S, read or write, reusable until revoked, as
+  p2's share link). Opening a link: sign in as yourself, or pick a name, which creates a temporary person (device
+  only, marked as made by that link). Every share made from a link points back to it; revoking the link deletes them
+  all, and every temporary person who came only through it is deleted with their sign-in ended; changing the link
+  from write to read changes all its shares. What a deleted person wrote stays readable (entries store the author's
+  name). A temporary person may bind a Radius login (to sign in on other devices); that does not make them permanent:
+  only something the owner gives them (a membership) keeps them when the link goes.
+- **Admission returns the variant (owner, 2026-11-14, voice; refines "Admission before the factory"):** `admit` takes
+  the principal, reads the data it needs and returns a variant or a denial; the factory builds that variant. No
+  separate "level" vocabulary. Many plugins in one session ask the same question, so the sessions plugin answers it
+  once (read or write, from the app's rule and the shares) and each plugin's `admit` turns that answer into its own
+  variant. Plugins never look at principal kinds; app-specific permissions (a coach and a player) live only in the
+  app's own plugins and their own admissions.
+- **Admission hands the factory its data (owner, 2026-11-14, voice; supersedes "Admission returns the variant" of the
+  same day):** factories are synchronous, so admission is where data about the caller is read; it returns a typed
+  value the contract declares (the variant one field of it, plus what the object needs about this caller: role, team,
+  memberships), and the factory gets that value. Equal values change nothing; a different one rebinds. Every object
+  type may take an admission, an app's own stores and objects included; an app defines one and reuses it. Recorded
+  in `packages/chord/docs/admission/design.md` §0 with its open points.
+- **Slice 0 changes Chord first; the kit moves into p3 (owner, 2026-11-14):** before slice 1 is redone, a Chord slice
+  ("slice 0") adds admission that hands the factory a typed value and named queries any object on the store's host
+  can run live (range, total). Its design is reviewed by Opus, Sol and Astra (twice) before the owner; a concise
+  explainer of the additions follows the reviewed design. The app kit (`packages/chord/src/node/app`) is copied into
+  p3 as base code and changed there; Chord keeps its general components (workers, HTTP, plugin loading, surfaces);
+  the kit stays in Chord only while p2 uses it and goes when p3 is done (supersedes "Keep the app kit, change it
+  where it does not fit", 2026-11-06). No deadline planning from agents' estimates ("agents suck at estimates").
+- **A session's state and last touch are session facts (owner, 2026-11-14):** working, waiting, settled, failed and
+  the last-touch time are columns of the session row, owned and written by the sessions plugin on transitions; the
+  status plugin keeps only hot details (current step, progress). Script rollups may come back later over the active
+  set only (open).
+- **A plugin guide for agents (owner, 2026-11-15):** p3 gets a guide for agents (and people) writing p3 plugins, as
+  `packages/coding-agent/docs/extensions.md` is for extension-writing agents: the few patterns a plugin needs (a store
+  and its named queries, a view with its admission, a list, a contribution), each as a complete example, the rules and
+  the footguns. It is its own slice (23, after locks), written as the API settles and kept current with every slice. It is also
+  the test of whether Chord apps are easy to reason about: a fresh agent given only the guide writes a few plugins
+  (a private journal, a sidebar grouping, a shared board), and the lines, concepts and mistakes are counted.
+- **Pluggable worker runners (owner, 2026-11-15):** where a session's worker runs is a plugin: a runner registry in
+  p3's kit, local fork the default, remote machines next, Durable Objects once their profile is decided. A runner is
+  easy to write and gets everything from the server (the full worker bundle, then changed plugin bundles as rollout
+  steps, start data). One runner may host several sessions. The server as the hub is the scale-up bottleneck; a
+  solution is wanted later, not now. Slice 24.
+- **Stale workers are Chord's problem (owner, 2026-11-15):** no plugin checks whether a call comes from a worker that
+  is gone. The workers component closes a worker's link and aborts its calls before it publishes the exit or starts a
+  successor, and records each running worker's incarnation before its first call. p2's hand-written generation
+  checks become unnecessary (bookkeeping that is not a staleness check stays).
+- **The p3 kit, slice 1 redo (owner, 2026-11-15, decisions A to F):** the kit copied into p3 is typed to p3 (no
+  principal parameter; it imports p3's name, API, kinds and principals; `startServer` takes only `dataDir`, `root`,
+  `listen`, the session worker kind and `onError`) and keeps only what slice 1 uses (later slices add back what they
+  need). `forward(store, Remote, variant, own?)` takes the members a view implements itself as a fourth argument. A
+  session's state and last touch have no writer before the harness (slice 3). p3's own names in the kit (`p3.info`,
+  `p3.sign-ins`, cookie `p3-sign-in`, `/_p3/owner`): a browser shares cookies across ports of one host. p3's default
+  data directory is `~/.pi/p3`. `forward` reads a contract's member names through Chord's `memberNames(contract,
+  variant)`.
+- **p2's plugin patterns, fixed (owner, 2026-11-15; reviewed by Fable, Sol and Astra):** views of a store are
+  explicit remote contracts filled by `forward` (never a public contract derived from a store); a contribution that
+  needs a reference or a native uses p3's `contribute` helper; one audience per contract (workers and the server get
+  their own contracts; variants are levels of one audience); `useVariant(ref, variant)` in `chord/react` and the
+  terminal scope, typed, the UI's way to read a variant (a UI-only exception to Chord's C15); stale-worker checks are
+  Chord's (decision "Stale workers are Chord's problem").
+- **Chord is cut down at the end, if needed (owner, 2026-11-15):** no removal of Chord parts (jobs, sync, telemetry
+  ingest) now; a size audit only once p3 is built, and only where needed.
+- **Walkthroughs make the owner the owner (owner, 2026-11-15):** a slice's walkthrough exists so the owner understands
+  what was built, how and why, in full: self-contained (no source access assumed), code over prose, the list of every
+  file created and touched first, creative where that explains better (`workflow.md`, step 7).
+- **p3's practices on Chord (owner, 2026-11-15):** `chord-practices.md` holds the shape of a p3 plugin, the rules and
+  the mistakes made with their fixes; it is read before every slice and in every handoff, and kept current.
+- **The builder (owner, 2026-11-15):** the p3 session is the builder from here on; subagents review (and research).
+- **Sign-in with Radius comes right after slice 1 (owner, 2026-11-15):** its own slice (25), with a small web and
+  terminal scaffold and its own plain styles until Elanor's components arrive; the research is private
+  (`/home/badlogic/chord-notes/research/p3-radius-signin.md`).
+- **Slice 1's review round 1 (owner, 2026-11-15):** the p3 kit has exactly one worker kind, sessions
+  (`src/kit/session-workers.ts`). A sign-in that ends (revoked, or expired unused) closes its own links at once,
+  through the close function Chord's HTTP component now hands `links.opened(request, principal, close)`; not through
+  `host.revoke`, which ends objects by principal and so would end the owner's shared objects for every device.
