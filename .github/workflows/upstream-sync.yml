@@ -33,7 +33,10 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+      # Pull requests are opened and edited with GITHUB_TOKEN so the sync works without
+      # granting Pull requests write to the PAT. The PAT is only needed for the branch
+      # push, which is what starts CI.
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
