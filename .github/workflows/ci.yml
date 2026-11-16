@@ -2,12 +2,12 @@ name: CI
 
 on:
   push:
-    # 3pino fork: upstream-sync is pushed by the sync workflow; the push event is what
-    # starts CI for that branch, because pull requests opened with GITHUB_TOKEN do not
-    # trigger workflows.
     branches: [main, upstream-sync]
   pull_request:
     branches: [main]
+  # 3pino fork: the sync workflow dispatches CI for upstream-sync, because pull requests
+  # opened with GITHUB_TOKEN do not trigger workflows.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}

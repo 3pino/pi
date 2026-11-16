@@ -19,15 +19,9 @@ upstream と merge しながら開発を進めていきます。個人的なプ�
 - `.github/workflows/upstream-auto-merge.yml`: `upstream-sync` ブランチの CI が成功したら PR を merge し、リリースを dispatch する。
 - `.github/workflows/fork-release.yml`: `scripts/fork-release.mjs` を実行して `fork-v<version>` を公開する。現在の upstream バージョンに fork リリースが既にあればスキップする（`force` で強制、`dry_run` で build・pack・smoke test のみ）。main の `packages/coding-agent/package.json` の push でも起動する。
 
-Secret `UPSTREAM_SYNC_TOKEN` は `upstream-sync` ブランチの push にだけ使う。push が `GITHUB_TOKEN` だとイベントが workflow を起動しないため、CI が走らず自動マージされずに PR が残る。PR 作成・マージ・リリース dispatch は `GITHUB_TOKEN` で行うので、PAT に Pull requests の write は要らない。CI は PR ではなく `upstream-sync` への push で走る（`ci.yml` の push トリガーに `upstream-sync` を追加済み）。
+すべて `GITHUB_TOKEN` で動くので PAT も Secret も要らない。`GITHUB_TOKEN` が作った pull request イベントでは workflow が起動しないため、CI は sync workflow が `upstream-sync` に対して明示的に dispatch する。PR 作成にはリポジトリ設定 Settings → Actions → General の "Allow GitHub Actions to create and approve pull requests" が必要（API なら `PUT /repos/3pino/pi/actions/permissions/workflow` の `can_approve_pull_request_reviews`）。
 
-必要な権限（fine-grained PAT、このリポジトリのみ）: Contents の write。classic PAT なら `repo`。
-
-```sh
-gh secret set UPSTREAM_SYNC_TOKEN -R 3pino/pi
-```
-
-`gh pr create` が `Resource not accessible by personal access token` で失敗していたことがある。PAT の Pull requests 権限ではなく、PAT を gh のトークンに使っていたのが原因。PR 操作は `GITHUB_TOKEN` に任せること。
+以前は `UPSTREAM_SYNC_TOKEN`（PAT）を使っていたが、PAT の Pull requests 権限不足で `gh pr create` が `Resource not accessible by personal access token` で失敗したため廃止した。Secret が残っていても使われない。
 
 コンフリクトが `FORK_OURS_FILES` 以外で起きた場合は自動化が止まるので、手元で merge して解決し、push 後にリリースする。既存の同期 PR があればその PR にコメントし、無ければ workflow を失敗させて summary に一覧を出す（この fork は Issues 無効なので Issue は使わない）。
 

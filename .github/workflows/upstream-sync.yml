@@ -3,7 +3,7 @@ name: Upstream sync
 # 3pino fork: merge earendil-works/pi into this fork once a day and open a PR.
 # The PR is merged and released by upstream-auto-merge.yml / fork-release.yml
 # when CI passes. Files in FORK_OURS_FILES keep the fork version on conflict;
-# any other conflict aborts the merge and reports it in an issue.
+# any other conflict aborts the merge and reports it on the run.
 
 on:
   schedule:
@@ -12,6 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -33,9 +34,8 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     env:
-      # Pull requests are opened and edited with GITHUB_TOKEN so the sync works without
-      # granting Pull requests write to the PAT. The PAT is only needed for the branch
-      # push, which is what starts CI.
+      # Everything runs with GITHUB_TOKEN. Pull requests opened with it do not trigger
+      # workflows, so CI for the sync branch is dispatched explicitly after the PR exists.
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
@@ -43,7 +43,6 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
 
       - name: Configure git
         run: |
@@ -138,6 +137,9 @@ jobs:
           else
             gh pr create --base main --head "$SYNC_BRANCH" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
           fi
+
+          # The pull request event from GITHUB_TOKEN is suppressed, so start CI by hand.
+          gh workflow run ci.yml --ref "$SYNC_BRANCH"
 
       - name: Report merge conflicts
         if: steps.upstream.outputs.changes == 'true' && steps.merge.outputs.clean == 'false'
