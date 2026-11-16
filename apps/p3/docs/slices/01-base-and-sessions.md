@@ -45,6 +45,22 @@ Carried from round 1: a hold of `SessionWorker` for an id never created starts a
 ask the table: admission or the session service's `open` decides it); archive does not stop the worker (above); the list
 is the newest 200, archived ones included, without paging.
 
+## p2's features in this area
+
+From `apps/p2/docs/p3-functions/sessions-access.md` and p2's `plugins/sessions/` (domains 1 and 2 of the map):
+
+| p2 feature | p3 |
+| --- | --- |
+| create a session (local or remote, directory check, defaults) | built: create with a title; location and defaults come with slices 3 and 8 |
+| a live list that never starts a worker | built: the newest 200, from the server's table |
+| rename | built (owner); automatic and agent-set titles: slice 18 |
+| archive, restore | built as a mark; stopping the worker, ending guest access and forwards: slice 18 |
+| pin, relocate, clone, fork, delete, unread marks | slice 18 |
+| list grouped by machine and directory | slice 15 (groupings) |
+| start a worker on demand, one per store | built (the kit) |
+| idle stop, a failed start kept until retried, crash reports, shutdown | built in the kit's workers component; checked by slice 18 |
+| generation fence on worker reports | not needed yet: the worker reports nothing (the server owns the facts) |
+
 ## What is built
 
 ```text
@@ -159,7 +175,7 @@ Results go into this brief. No budget is set before the first measurement; slice
    one; or the page names it (`map/book.md` proposed it for instant UI: a new session shown before the round trip).
 4. **Facts beside the row:** a session's facts as host-keyed documents written in the same transaction as its table row
    (recommended: the list needs a table, a worker and later admissions need a keyed pin; one owner, one commit).
-5. **Not in this slice** (recommended): the always-`unmanaged` gate (slice 16), compression on kit hosts and the startup
+5. **Not in this slice** (recommended): the always-`unmanaged` gate (slice 17), compression on kit hosts and the startup
    spans (measured from outside first; then decided with the budgets in slice 2), session delete, export, import, fork
    (later, with the lifecycle registry).
 

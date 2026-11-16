@@ -56,8 +56,8 @@ P2_FAKE=1 npm start          # http://127.0.0.1:8788, data in ~/.pi/p2
   (`/chord?web=<base>`); every other client names itself (`?client=tui`, `cloud`, `script` for scripts and tests;
   `src/runtime/stale-page.ts`). The server refuses a link naming another base, or neither a base nor a known client (a
   page from before 2026-11-12, which would re-hold types removed since), at once (close code 4001; the page reloads)
-  and the owner gets a notice (source `stale-pages`) naming who it was: the owner's access or device, or the guest,
-  the browser and its address. A TUI launcher from before the marker is refused too (it retries until updated). The last four plugin sets' files stay served. Web facets must not share module state with
+  and the server logs (source `stale-pages`, a log line, not a notice: nothing to act on) who it was: the owner's
+  access or device, or the guest, the browser and its address. A TUI launcher from before the marker is refused too (it retries until updated). The last four plugin sets' files stay served. Web facets must not share module state with
   another plugin's files (each plugin's script holds its own copy of a file it imports from another plugin):
   `plugin-practices.md`. The TUI launcher still polls `/__p2_tui` (p2's own TUI bundle). There is no Vite,
   source-module server or `index.html`.
@@ -790,7 +790,7 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   envs plugin's directory picker `plugins/envs/contract.web.tsx`); a contract imports only the API, shared packages
   and its own plugin's files. What two plugins share otherwise lives in the base and reaches them through the API
   (`src/runtime/schemas.ts`, `entries.ts`, `notices.ts`, `origin.ts`, `environments.ts`, `downloads.ts`,
-  `tui-chat.ts`). Base code imports no plugin code; only the page's shared components (`ModelPicker.tsx`) read
+  `tui-chat.ts`). Base code imports no plugin code; only the page's shared components (`model-choice.ts`) read
   plugin contract types (`import type`). A plugin's own files stay in the plugin, assets
   included (`plugins/terminals/vendor/ghostty`). Facets use no `import.meta`: the p2 app directory is start data
   (`Server.info.app`, `WorkerInit.app`). The terminal host (`plugins/terminals/main.ts`) is its own program, not a
@@ -981,9 +981,10 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
     backgrounds (Elanor's ghost fills) span the row; the label's hit area covers it. Labels are one line, cut with "…" at
     the end (`.nav-label`). No leading disclosure column, so nothing is indented by it: a group's row shows or hides
     its sessions, not indented (every session's working mark is in one column); a group's row is medium weight. The
-    owner's list starts with a "New session" row in a group's type ("+" marker, a link to `/new`, the new-session
-    screen, selected while it shows); the header holds the Pi logo (the Familiar's button) and the
-    collapse trigger. A session's row is a link to its main conversation,
+    owner's list starts with the rows plugins put there (the `sidebar-start:<name>` slots, each a list item: the
+    Familiar's "Ask Pi") and a "New session" row, all in a group's type ("+" marker, a link to `/new`, the new-session
+    screen, selected while it shows), 16px above the first rollup (rollups are 24px apart); the header holds the Pi
+    logo and the collapse trigger. A session's row is a link to its main conversation,
     selected while that shows (the label's hit area covers the row: the label is not positioned, so its `::after` is
     laid out on the row). Its other conversations (its branches, then its subagents and one-shot agents, the most
     recently active first) are below it, shown or hidden only by its chevron (`Toggle`, a button after the label;
@@ -998,7 +999,7 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   - **State marks** (`Row.tsx`, the top of `style.css`): a row says two things in two places. The marker says whether
     a session runs: `IconMarker` frames the row's icon (a glyph, a folder, a lock) with a dash travelling around it
     (22px, 3px outside the icon, clear of a glyph's corner cells), `WorkingMark` is a spinner where a row has no icon (a
-    group's sessions, conversations, the Familiar's logo, a collapsed rollup's details). That is the sidebar's only
+    group's sessions, conversations, a collapsed rollup's details). That is the sidebar's only
     motion. The row's end says whether it wants the owner, steady: an unread answer makes the title bold
     (`.session-title.unread`) with a blue dot before the time (`UnreadMark`); a failed worker shows a warning sign and
     "Failed" (`FailedMark`, the error in its tooltip). Each state has its own shape, not only a colour (spinner or
@@ -1099,10 +1100,15 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   `<sender kind="owner|guest|session|subagent" …/>` block (`src/runtime/sender.ts`, values escaped; a subagent's
   text follows as `[<intent>] <text>`), which the preamble explains and nothing reads back: readers use the entry data.
   Stop/dequeue restore text only to its author; removing a queued input (×,
-  no restore) discards it, as in Pi Mobile.
+  no restore) discards it, as in Pi Mobile. Stop is Durable's `Conversation.abort()`, which withdraws the queue in the
+  commit that marks the run; people's text it withdrew goes back to its authors (the caller's to the composer,
+  others' to their drafts; `conversations stop`, which has no author, gives all to drafts). Peer and subagent messages
+  are submitted with `onAbort: "keep"`, since their senders cannot take them back: they stay queued, as after a failed
+  run, and go with the next input. A main agent's queued task for a subagent is withdrawn (its reporter says so).
 - **Windowed conversation view** (`plugins/chat/worker.ts`, `src/web/history.ts`, `src/runtime/conversation-stats.ts`):
-  `Chat.view` is Durable's view as is: a window over the transcript (the fork-aware history in entry ID order, head
-  markers in place), the newest 50 entries, then appends, back to 50 past 100, `before` the entry just before it. The
+  `Chat.view` is Durable's view with image references: a window over the transcript (the fork-aware history in entry
+  ID order, head markers in place), the newest 50 entries, then appends, back to 50 past 100, `before` the entry just
+  before it. The
   worker holds one Durable watch per conversation (default window), shared by every viewer. Clients (web and TUI)
   keep a `TranscriptStore` per host and conversation over Durable's `ConversationTranscript`: every value of the view
   is merged in, so entries that leave the window stay; scrolling up loads earlier pages (`Chat.entries`, 100 entries
@@ -1120,6 +1126,14 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   sheet reads `ChatCosts`, from `context()` when it opens. Measured with 3,000 seeded entries (fake provider, slayer):
   opening sends 50 entries (125 KiB, 14 ms) instead of 101 (251 KiB, 33 ms); paging to the start 30 pages, 244 ms
   (before: 29, 186 ms); building the whole transcript 1.3 ms (before: 10.9 ms).
+- **Image references** (`src/runtime/entry-images.ts`, `plugins/chat/server.ts`): the view's and `Chat.entries`'s
+  image parts are `{ type: "image", mimeType, src, width, height }` instead of base64 data; pages load them from
+  `GET /entry-image?session&conversation&entry&message&part` (viewers of the session only, same-site, cached as
+  immutable), which reads the entry through `ChatImages` on the worker. Why: a window of 50 entries with screenshots
+  came to 38 MB, past a page link's part limit, so the session could not be opened; through Radius the brain's loopback
+  socket closed on it and the page reconnected in a loop. Clients read image parts through `shownImage` (inline parts
+  of kept copies become data URLs). Pages take parts up to 32 MiB from the server (`SERVER_PART_LIMITS`, Chord's
+  default is 16 MiB); Radius's relay limits one data message to 32 MiB by default (Radius ee560a41; 16 MiB before).
 - **Run failures** (`pi.live.runFailure`): why the newest run ended without an answer shows as a failure notice at the
   end of the transcript (web and TUI, the error notice style) until the next run starts: `model_error` and `no_model`
   "The model could not answer this input. <detail>", `faulted` "The run failed: <detail>", `orphaned` "The run could
@@ -1277,8 +1291,21 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   through the worker's `Attachments` local (only uploads of that session): each is materialized before admission into
   the data directory's `uploads/<session>/` on this machine (for the default data directory that is
   `~/.pi/p2/uploads/<session>/`) and, when the receiving conversation works on another environment, into
-  `~/.pi/p2/uploads/<session>/` there; the message lists those paths, with images inline (from this machine's copy)
-  when the model accepts them. `DownloadStore` (server local) snapshots a server file into the session's files;
+  `~/.pi/p2/uploads/<session>/` there. The message's text places its files: a reference
+  `![name](attachment:<upload id>)` (images) or `[name](attachment:<upload id>)` (other files) counts when its ID is one
+  of the message's attachments (`src/runtime/references.ts`). The model reads each file where it is referenced, marked
+  as Codex marks local images: `<image name=[Image #N] path="<copy>">`, the image (from this machine's copy, when the
+  model accepts images, fitted to its limits before submission with the worker's image processor,
+  `WorkerParts.images`, Durable's `fitImage`), what fitting changed or why it is left out, `</image>`; other files as
+  `<file name=[File #N] path="<copy>" />`; a second reference as `[Image #N]` alone; unreferenced uploads (the TUI,
+  Discord) after the text. The web composer (`plugins/chat/draft-editor.tsx`) shows references as pills: files are
+  placed at the caret or a drop's point, moved by dragging or the pill's menu (Earlier, Later, Remove), and every
+  change, typing and pills alike, goes through the composer's own undo history (`draft-history.ts`); the browser's
+  undo (keys, Edit menu, iOS shake) never runs. Picked files are referenced by their local keys until the send
+  renames them to upload IDs; references to this session's uploads (a message brought back by Edit or from the queue)
+  go as they are. Transcript, previews, titles and the TUI show references by the files' names. `read`
+  (coding-tools) and the `fit-images` plugin (Durable's `afterTool` extension, for every tool result) fit the images of
+  tool results with the same processor before they are committed: the transcript never changes later. `DownloadStore` (server local) snapshots a server file into the session's files;
   producers on the worker (send_file) write there directly (space `downloads`, key the snapshot's UUID). `GET|HEAD
   /download?session=&id=` serves them through `SessionFiles` to the owner and the session's guests (no
   `Sec-Fetch-Site: cross-site`; ranges for audio/video). An archived or unknown session's downloads and artifacts
@@ -1564,9 +1591,11 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   worker runs; an idle worker stops after 5 minutes without viewers or warming) and at each start, else in an
   `InputGate` before the next input is admitted, which waits for the summary. Web: home (the `home` slot: `/` replaces
   itself with its session, made on first use; while the owner has it archived, with the new-session screen) and the
-  `drawer-brand` slot, the Pi logo at the start of the owner's sidebar header (a button titled "Ask Pi" that opens it,
-  restoring it when archived; the session's working spinner or unread dot on its corner); the sessions plugin's `DrawerRowsContext` (`plugins/sessions/contract.web.tsx`) gives it the
-  rows, `SessionDot` and `listApart`, which leaves its session out of the rollups. The TUI lists it as an ordinary session. Tests:
+  `sidebar-start:familiar` slot, the "Ask Pi" row above the owner's "New session" (the Pi logo as its icon, framed
+  while its session works; bold with a dot for an unread answer; it opens the session, restoring it when archived); the
+  sessions plugin's web contract (`plugins/sessions/contract.web.tsx`) gives it the rows and `listApart`
+  (`DrawerRowsContext`), which leaves its session out of the rollups, and the row's shape and marks (`NavRow`,
+  `IconMarker`, `UnreadMark`). The TUI lists it as an ordinary session. Tests:
   `familiar.test.ts`, `ui-familiar.test.ts`, the conversations actions in `conversations.test.ts`.
 - **Scope prompt** (`plugins/scope-prompt`, experiment; owner only, web only): an overlay (`overlay:` slots, the
   `SlotList` at the end of `AppLayout`) that leaves the page as it is until pointing mode is on (`mode.ts`): a double tap
@@ -1587,7 +1616,7 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   stages the `<scope>` block on the session (`ScopeStage`, worker facet, by `requestId`, dropped after a minute) and
   the views' send router carries it with that message (`MessageContexts`, which now get the routed input), so the
   transcript shows the text with the note "with scope Chat › Message". Anything else (the sidebar) goes to the
-  Familiar: opened as its logo does, the text queued on its main conversation followed by the block with the page's
+  Familiar: opened as its sidebar row does, the text queued on its main conversation followed by the block with the page's
   session, conversation and title or list, which its prompt section explains. Not yet: frames' insides (an html
   artifact is its pane). Test: `ui-scope-prompt.test.ts`.
 - **Subagents** (`plugins/subagents`): owns its protocol-independent Durable extension (persistent
