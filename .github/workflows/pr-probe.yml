@@ -1,0 +1,21 @@
+name: PR probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check the token and open the sync pull request
+        run: |
+          gh api /repos/"$GH_REPO" --jq '{fork, private}' || true
+          gh pr list --head upstream-sync --state open --json number,title --jq '.[]'
+          gh pr create --base main --head upstream-sync --title "probe: GITHUB_TOKEN can open a pull request" --body "Probe for the sync automation. Delete after checking." || true
