@@ -80,8 +80,9 @@ export class UserMessageComponent extends Container {
 		// Container output is shared across frames; copy it once per change instead of mutating it.
 		if (this.zoneLines?.source !== lines) {
 			const zoned = [...lines];
-			zoned[0] = OSC133_ZONE_START + zoned[0];
+			// Last line first: with no vertical padding a one-line message is both, and START must come first.
 			zoned[zoned.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + zoned[zoned.length - 1];
+			zoned[0] = OSC133_ZONE_START + zoned[0];
 			this.zoneLines = { source: lines, lines: zoned };
 		}
 		return this.zoneLines.lines;

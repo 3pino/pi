@@ -47,7 +47,7 @@ describe("UserMessageComponent", () => {
 
 		expect(second).toBe(first);
 		expect(second[0]!.split(OSC133_ZONE_START)).toHaveLength(2);
-		expect(second[2]!.split(OSC133_ZONE_END)).toHaveLength(2);
+		expect(second[0]!.split(OSC133_ZONE_END)).toHaveLength(2);
 	});
 
 	test("chains Markdown transformers with user message context", () => {
